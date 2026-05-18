@@ -71,5 +71,5 @@ All rules output JSON to stdout with `rule`, `passed`, and `findings` fields.
 ## Key Design Decisions
 
 - The `csv_relatedimages` rule detects the image management pattern (env var vs static CSV) automatically rather than requiring config. Threshold: 5+ `RELATED_IMAGE_*` occurrences in Go source → env var pattern.
-- `operator_manifest.py` shells out to `git clone --depth 1` to fetch the operator source. It expects the operator at `/tmp/opendatahub-operator` by default.
+- `operator_manifest.py` shells out to `git clone --depth 1` (list form, no shell) to fetch the operator source. When no `--operator-path` is given, the orchestrator creates a unique temporary directory via `tempfile.mkdtemp()`. The repo URL is hardcoded to the upstream operator; it is never user-supplied.
 - Optional `yaml` import: rules that parse YAML gracefully degrade if PyYAML is not installed.

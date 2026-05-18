@@ -7,9 +7,7 @@ from pathlib import Path
 try:
     from rules.common import Finding, RuleResult
 except ImportError:
-    import sys as _sys
-    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from rules.common import Finding, RuleResult
+    from common import Finding, RuleResult
 
 IMAGE_REF_PATTERN = re.compile(
     r'((?:[\w.\-]+(?:\.[\w.\-]+)+(?::\d+)?/)?[\w.\-]+/[\w.\-]+)([:@][\w.\-:]+)'

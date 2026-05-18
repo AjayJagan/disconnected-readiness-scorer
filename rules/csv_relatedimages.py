@@ -12,15 +12,15 @@ a static CSV, it checks that every image appears in relatedImages.
 Test files, CI config, and semgrep rules are excluded from blocker findings.
 """
 
+from __future__ import annotations
+
 import re
 from pathlib import Path
 
 try:
     from rules.common import Finding, RuleResult
 except ImportError:
-    import sys as _sys
-    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from rules.common import Finding, RuleResult
+    from common import Finding, RuleResult
 
 IMAGE_REF_PATTERN = re.compile(
     r'(?:image:\s*|"image":\s*"|FROM\s+)'
@@ -191,12 +191,15 @@ def check_env_var_pattern(
         ))
 
     image_refs = scan_for_image_refs(repo_root)
+    file_lines_cache: dict[Path, list[str]] = {}
 
     for filepath, line_num, image in image_refs:
         excluded = is_excluded_file(filepath)
 
         try:
-            line_content = filepath.read_text().splitlines()[line_num - 1]
+            if filepath not in file_lines_cache:
+                file_lines_cache[filepath] = filepath.read_text().splitlines()
+            line_content = file_lines_cache[filepath][line_num - 1]
         except (OSError, IndexError):
             line_content = ""
 

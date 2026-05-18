@@ -220,6 +220,9 @@ def run(operator_path: str) -> dict:
 if __name__ == "__main__":
     import sys
 
-    path = sys.argv[1] if len(sys.argv) > 1 else "/tmp/opendatahub-operator"
+    if len(sys.argv) < 2:
+        print("Usage: operator_manifest.py <path-to-operator-repo>", file=sys.stderr)
+        sys.exit(1)
+    path = sys.argv[1]
     result = run(path)
     print(json.dumps(result, indent=2))

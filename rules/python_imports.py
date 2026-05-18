@@ -7,9 +7,7 @@ from pathlib import Path
 try:
     from rules.common import Finding, RuleResult
 except ImportError:
-    import sys as _sys
-    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from rules.common import Finding, RuleResult
+    from common import Finding, RuleResult
 
 GIT_DEP_PATTERN = re.compile(r'git\+https?://[^\s]+')
 PIP_INSTALL_PATTERN = re.compile(r'(?:pip|pip3)\s+install\s+([^\s]+)')

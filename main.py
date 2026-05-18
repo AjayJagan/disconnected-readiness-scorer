@@ -11,6 +11,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 from datetime import date
 from pathlib import Path
 
@@ -55,6 +56,8 @@ def parse_args(argv=None):
     parser.add_argument(
         "--rules", default="all",
         help="Comma-separated rule aliases, or 'all' (default: all). "
+             "'all' runs the default set (csv, tags, egress, python); "
+             "add 'manifest' explicitly for operator cross-referencing. "
              f"Available: {', '.join(RULE_REGISTRY)}",
     )
     parser.add_argument(
@@ -64,7 +67,7 @@ def parse_args(argv=None):
     parser.add_argument(
         "--operator-path",
         help="Path to a pre-cloned opendatahub-operator. "
-             "If omitted, clones to /tmp/opendatahub-operator when needed.",
+             "If omitted, clones to a temporary directory when needed.",
     )
     parser.add_argument(
         "--output", "-o",
@@ -86,7 +89,11 @@ def resolve_rules(rules_arg):
 def load_manifest(operator_path):
     mod = importlib.import_module("rules.operator_manifest")
     if not operator_path:
-        operator_path = "/tmp/opendatahub-operator"
+        operator_path = tempfile.mkdtemp(prefix="odh-operator-")
+        target = Path(operator_path)
+        print("  Cloning opendatahub-operator (shallow)...", file=sys.stderr)
+        mod.clone_operator(target)
+    else:
         target = Path(operator_path)
         if not (target / ".git").exists():
             print("  Cloning opendatahub-operator (shallow)...", file=sys.stderr)
@@ -97,6 +104,8 @@ def load_manifest(operator_path):
 
 
 def adapt_manifest_result(manifest):
+    # passed stays True: manifest issues are informational/warning only,
+    # not blockers — the csv rule handles actual disconnected-readiness failures.
     result = RuleResult(rule="operator-manifest")
     all_vars = sorted(set(e.env_var for e in manifest.images))
     result.findings.append(Finding(
