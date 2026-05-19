@@ -6,7 +6,7 @@ from pathlib import Path
 
 try:
     from rules.common import Finding, RuleResult
-except ImportError:
+except ModuleNotFoundError:
     from common import Finding, RuleResult
 
 EGRESS_PATTERNS = {

@@ -3,6 +3,8 @@
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from rules.operator_manifest import (
     clone_operator, parse_component_images, parse_known_issues,
     build_manifest, run, ImageEntry, COMPONENTS_PATH,
@@ -34,11 +36,8 @@ class TestCloneOperator:
         import subprocess
         mock_run.side_effect = subprocess.CalledProcessError(1, "git")
         target = tmp_path / "operator"
-        try:
+        with pytest.raises(subprocess.CalledProcessError):
             clone_operator(target)
-            assert False, "Should have raised"
-        except subprocess.CalledProcessError:
-            pass
 
 
 class TestParseComponentImages:
@@ -118,7 +117,7 @@ class TestParseKnownIssues:
             "- image: RELATED_IMAGE_BROKEN\n"
             "- image: RELATED_IMAGE_STALE\n"
         )
-        known, rhai = parse_known_issues(tmp_path)
+        known, _ = parse_known_issues(tmp_path)
         assert "RELATED_IMAGE_BROKEN" in known
         assert "RELATED_IMAGE_STALE" in known
 

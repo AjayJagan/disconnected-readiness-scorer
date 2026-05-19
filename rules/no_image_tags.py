@@ -7,7 +7,7 @@ from typing import List
 
 try:
     from rules.common import Finding, RuleResult
-except ImportError:
+except ModuleNotFoundError:
     from common import Finding, RuleResult
 
 IMAGE_REF_PATTERN = re.compile(

@@ -7,7 +7,7 @@ from typing import List, Set
 
 try:
     from rules.common import Finding, RuleResult
-except ImportError:
+except ModuleNotFoundError:
     from common import Finding, RuleResult
 
 GIT_DEP_PATTERN = re.compile(r'git\+https?://[^\s]+')
