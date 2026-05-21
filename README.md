@@ -146,6 +146,106 @@ exceptions:
     reason: "Uses cluster-internal API proxy, not external egress"
 ```
 
+## PR Integration
+
+The primary use case for this tool is running it against Pull Requests in RHOAI component repositories, catching disconnected-breaking changes **before they merge** rather than weeks later during manual testing.
+
+### GitHub Actions (recommended)
+
+Add a workflow to each target repository that runs the scorer on every PR:
+
+```yaml
+# .github/workflows/disconnected-readiness.yml
+name: Disconnected Readiness Check
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  disconnected-score:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Clone disconnected-readiness-scorer
+        run: git clone --depth 1 https://github.com/opendatahub-io/disconnected-readiness-scorer.git /tmp/scorer
+
+      - name: Install dependencies
+        run: pip install pyyaml
+
+      - name: Run disconnected readiness check
+        run: python3 /tmp/scorer/main.py . --report json --output disconnected-report.json
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: disconnected-readiness-report
+          path: disconnected-report.json
+```
+
+The workflow exits with code `1` when blocker-level findings are present, which will fail the PR check.
+
+### Targeted rules per repository
+
+Not every rule applies to every repo. Use `--rules` to run only the relevant checks:
+
+| Repository type | Recommended rules |
+|----------------|-------------------|
+| Operators using `RELATED_IMAGE_*` env vars | `csv,tags,manifest` |
+| Python ML components (e.g., model serving) | `python,tags,egress` |
+| Go services / controllers | `csv,tags,egress` |
+| Frontend / dashboard | `egress` |
+
+Example for a Python-heavy repo:
+
+```yaml
+      - name: Run disconnected readiness check
+        run: python3 /tmp/scorer/main.py . --rules python,tags,egress
+```
+
+### PR comment reporting
+
+To post results as a PR comment instead of just failing the check, pipe the markdown report into the GitHub CLI:
+
+```yaml
+      - name: Run disconnected readiness check
+        id: score
+        run: |
+          python3 /tmp/scorer/main.py . --report markdown --output disconnected-report.md || true
+
+      - name: Post PR comment
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo "## Disconnected Readiness Report"
+            echo ""
+            cat disconnected-report.md
+          } | gh pr comment ${{ github.event.pull_request.number }} --body-file -
+```
+
+### Running locally on a PR branch
+
+To check a PR branch before pushing:
+
+```bash
+# From the component repo, on your PR branch
+python3 /path/to/disconnected-readiness-scorer/main.py .
+```
+
+Or using the Claude Code skill from the component repo root:
+
+```bash
+/disconnected-score
+```
+
 ## Development
 
 ### Dependencies
