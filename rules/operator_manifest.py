@@ -12,6 +12,12 @@ import json
 import subprocess
 from pathlib import Path
 from dataclasses import dataclass, field
+from typing import Dict, List, Tuple, Union
+
+try:
+    from rules.common import Finding, RuleResult
+except ModuleNotFoundError:
+    from common import Finding, RuleResult
 
 RELATED_IMAGE_PATTERN = re.compile(r'"(RELATED_IMAGE_[A-Z0-9_]+)"')
 IMAGE_MAP_PATTERN = re.compile(r'"([^"]+)":\s*"(RELATED_IMAGE_[A-Z0-9_]+)"')
@@ -52,7 +58,7 @@ def clone_operator(target_dir: Path) -> Path:
     return target_dir
 
 
-def parse_component_images(component_dir: Path, component_name: str) -> list[ImageEntry]:
+def parse_component_images(component_dir: Path, component_name: str) -> List[ImageEntry]:
     """Parse a component's Go files for RELATED_IMAGE mappings."""
     entries = []
 
@@ -93,7 +99,7 @@ def parse_component_images(component_dir: Path, component_name: str) -> list[Ima
     return entries
 
 
-def parse_known_issues(operator_root: Path) -> tuple[list[str], list[str]]:
+def parse_known_issues(operator_root: Path) -> Tuple[List[str], List[str]]:
     """Parse component-params-env.yaml for known issues and helm components."""
     params_file = operator_root / "component-params-env.yaml"
     known_issues = []
@@ -132,7 +138,7 @@ def parse_known_issues(operator_root: Path) -> tuple[list[str], list[str]]:
     return known_issues, rhai_helm
 
 
-def build_manifest(operator_root: str | Path) -> Manifest:
+def build_manifest(operator_root: Union[str, Path]) -> Manifest:
     """Build the complete image manifest from the operator source."""
     root = Path(operator_root)
     manifest = Manifest()
@@ -192,34 +198,45 @@ def build_manifest(operator_root: str | Path) -> Manifest:
     return manifest
 
 
-def run(operator_path: str) -> dict:
-    """Run the manifest builder and return structured output."""
+def run(operator_path: str) -> RuleResult:
+    """Run the manifest builder and return a RuleResult."""
     manifest = build_manifest(operator_path)
-
     all_env_vars = sorted(set(e.env_var for e in manifest.images))
 
-    return {
-        "total_images": len(all_env_vars),
-        "total_components": len(manifest.components),
-        "components": manifest.components,
-        "known_issues": manifest.known_issues,
-        "all_env_vars": all_env_vars,
-        "image_details": [
-            {
-                "env_var": e.env_var,
-                "component": e.component,
-                "manifest_key": e.manifest_key,
-                "source_file": e.source_file,
-                "source_line": e.source_line,
-            }
-            for e in manifest.images
-        ],
-    }
+    result = RuleResult(rule="operator-manifest")
+    result.findings.append(Finding(
+        severity="info",
+        file="",
+        line=0,
+        image="",
+        message=f"Operator manifest: {len(all_env_vars)} unique RELATED_IMAGE env vars "
+                f"across {len(manifest.components)} components.",
+    ))
+    for issue in manifest.known_issues:
+        result.findings.append(Finding(
+            severity="warning",
+            file="component-params-env.yaml",
+            line=0,
+            image=issue,
+            message=f"Known issue in operator manifest: {issue}",
+        ))
+    return result
 
 
 if __name__ == "__main__":
     import sys
 
-    path = sys.argv[1] if len(sys.argv) > 1 else "/tmp/opendatahub-operator"
-    result = run(path)
-    print(json.dumps(result, indent=2))
+    if len(sys.argv) < 2:
+        print("Usage: operator_manifest.py <path-to-operator-repo>", file=sys.stderr)
+        sys.exit(1)
+    path = sys.argv[1]
+    r = run(path)
+    print(json.dumps({
+        "rule": r.rule,
+        "passed": r.passed,
+        "findings": [
+            {"severity": f.severity, "file": f.file, "line": f.line,
+             "image": f.image, "message": f.message}
+            for f in r.findings
+        ],
+    }, indent=2))

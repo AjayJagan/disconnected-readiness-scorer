@@ -28,7 +28,7 @@ jobs:
       - name: Run tests with coverage
         run: |
           if [ -d tests ]; then
-            python -m pytest tests/ -v --cov=. --cov-report=xml --cov-report=term
+            python -m pytest tests/ -v --cov=. --cov-report=xml --cov-report=term --junitxml=junit.xml
           else
             echo "No tests directory found, skipping"
           fi
@@ -39,3 +39,9 @@ jobs:
         with:
           files: coverage.xml
           fail_ci_if_error: false
+
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/test-results-action@0fa95f0e1eeaafde2c782583b36b28ad0d8c77d3 # v1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}

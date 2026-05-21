@@ -3,7 +3,11 @@
 
 import re
 from pathlib import Path
-from dataclasses import dataclass, field
+
+try:
+    from rules.common import Finding, RuleResult
+except ModuleNotFoundError:
+    from common import Finding, RuleResult
 
 EGRESS_PATTERNS = {
     ".go": [
@@ -38,22 +42,6 @@ BUILD_PATHS = {".github", "ci", "hack", "build", "Dockerfile", "Makefile"}
 SKIP_DIRS = {".git", "vendor", "node_modules", "__pycache__", "test", "tests", "testdata"}
 
 
-@dataclass
-class Finding:
-    severity: str
-    file: str
-    line: int
-    image: str
-    message: str
-
-
-@dataclass
-class RuleResult:
-    rule: str = "no-runtime-egress"
-    passed: bool = True
-    findings: list = field(default_factory=list)
-
-
 def is_build_context(filepath: Path) -> bool:
     return (
         filepath.name in BUILD_DIRS
@@ -70,7 +58,7 @@ def has_configurable_url(line: str) -> bool:
 
 def run(repo_root: str) -> RuleResult:
     root = Path(repo_root)
-    result = RuleResult()
+    result = RuleResult(rule="no-runtime-egress")
 
     for filepath in root.rglob("*"):
         if any(d in filepath.parts for d in SKIP_DIRS):

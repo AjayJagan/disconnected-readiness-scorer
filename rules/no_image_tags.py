@@ -3,7 +3,12 @@
 
 import re
 from pathlib import Path
-from dataclasses import dataclass, field
+from typing import List
+
+try:
+    from rules.common import Finding, RuleResult
+except ModuleNotFoundError:
+    from common import Finding, RuleResult
 
 IMAGE_REF_PATTERN = re.compile(
     r'((?:[\w.\-]+(?:\.[\w.\-]+)+(?::\d+)?/)?[\w.\-]+/[\w.\-]+)([:@][\w.\-:]+)'
@@ -13,23 +18,7 @@ PRODUCTION_DIRS = {"manifests", "deploy", "config", "bundle", "helm", "chart", "
 TEST_DIRS = {"test", "tests", "e2e", "hack", "testdata"}
 CI_DIRS = {".github", ".tekton", "ci"}
 TEST_SUFFIXES = {"_test.go", "_int_test.go", "_internal_test.go"}
-SKIP_FILES = {"semgrep.yaml", "semgrep.yml", ".semgrep.yml"}
-
-
-@dataclass
-class Finding:
-    severity: str
-    file: str
-    line: int
-    image: str
-    message: str
-
-
-@dataclass
-class RuleResult:
-    rule: str = "no-image-tags"
-    passed: bool = True
-    findings: list = field(default_factory=list)
+SKIP_FILES = {"semgrep.yaml", "semgrep.yml", ".semgrep.yml", "params.env"}
 
 
 def is_excluded_file(filepath: Path) -> bool:
@@ -47,7 +36,7 @@ def is_production_file(filepath: Path) -> bool:
     return any(d in filepath.parts for d in PRODUCTION_DIRS) and not is_excluded_file(filepath)
 
 
-def scan_file(filepath: Path, root: Path) -> list[Finding]:
+def scan_file(filepath: Path, root: Path) -> List[Finding]:
     findings = []
     try:
         lines = filepath.read_text().splitlines()
@@ -89,7 +78,7 @@ def scan_file(filepath: Path, root: Path) -> list[Finding]:
 
 def run(repo_root: str) -> RuleResult:
     root = Path(repo_root)
-    result = RuleResult()
+    result = RuleResult(rule="no-image-tags")
     skip_dirs = {".git", "vendor", "node_modules", "__pycache__"}
     extensions = {".go", ".py", ".yaml", ".yml", ".json", ".toml"}
 

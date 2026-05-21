@@ -12,9 +12,15 @@ a static CSV, it checks that every image appears in relatedImages.
 Test files, CI config, and semgrep rules are excluded from blocker findings.
 """
 
+from __future__ import annotations
+
 import re
 from pathlib import Path
-from dataclasses import dataclass, field
+
+try:
+    from rules.common import Finding, RuleResult
+except ModuleNotFoundError:
+    from common import Finding, RuleResult
 
 IMAGE_REF_PATTERN = re.compile(
     r'(?:image:\s*|"image":\s*"|FROM\s+)'
@@ -30,22 +36,6 @@ TEST_SUFFIXES = {"_test.go", "_int_test.go", "_internal_test.go"}
 CI_DIRS = {".github", ".tekton", "ci"}
 SKIP_DIRS = {".git", "vendor", "node_modules", "__pycache__", ".tox"}
 SKIP_FILES = {"semgrep.yaml", "semgrep.yml", ".semgrep.yml"}
-
-
-@dataclass
-class Finding:
-    severity: str
-    file: str
-    line: int
-    image: str
-    message: str
-
-
-@dataclass
-class RuleResult:
-    rule: str = "image-manifest-complete"
-    passed: bool = True
-    findings: list = field(default_factory=list)
 
 
 def is_excluded_file(filepath: Path) -> bool:
@@ -92,7 +82,7 @@ def extract_related_image_vars(repo_root: Path) -> set[str]:
     for go_file in repo_root.rglob("*.go"):
         if any(d in go_file.parts for d in SKIP_DIRS):
             continue
-        if any(go_file.name.endswith(s) for s in TEST_SUFFIXES):
+        if is_excluded_file(go_file):
             continue
         try:
             content = go_file.read_text()
@@ -168,33 +158,54 @@ def scan_for_image_refs(repo_root: Path) -> list[tuple[Path, int, str]]:
     return results
 
 
-def check_env_var_pattern(repo_root: Path) -> RuleResult:
-    """Check repos that use RELATED_IMAGE_* env var pattern."""
-    result = RuleResult()
-    env_vars = extract_related_image_vars(repo_root)
+def check_env_var_pattern(
+    repo_root: Path,
+    manifest_env_vars: set[str] | None = None,
+) -> RuleResult:
+    """Check repos that use RELATED_IMAGE_* env var pattern.
 
-    result.findings.append(Finding(
-        severity="info",
-        file="",
-        line=0,
-        image="",
-        message=f"Repo uses RELATED_IMAGE_* pattern. Found {len(env_vars)} env vars.",
-    ))
+    When manifest_env_vars is provided (from operator_manifest), cross-references
+    the target repo's env vars against the authoritative operator manifest.
+    """
+    result = RuleResult(rule="image-manifest-complete")
+    local_vars = extract_related_image_vars(repo_root)
+
+    if manifest_env_vars is not None:
+        result.findings.append(Finding(
+            severity="info",
+            file="",
+            line=0,
+            image="",
+            message=f"Repo uses RELATED_IMAGE_* pattern. "
+                    f"Found {len(local_vars)} env vars in repo, "
+                    f"validated against {len(manifest_env_vars)} authoritative vars "
+                    f"from operator manifest.",
+        ))
+    else:
+        result.findings.append(Finding(
+            severity="info",
+            file="",
+            line=0,
+            image="",
+            message=f"Repo uses RELATED_IMAGE_* pattern. Found {len(local_vars)} env vars.",
+        ))
 
     image_refs = scan_for_image_refs(repo_root)
+    file_lines_cache: dict[Path, list[str]] = {}
 
     for filepath, line_num, image in image_refs:
         excluded = is_excluded_file(filepath)
 
-        # Check if the line also contains a RELATED_IMAGE reference
         try:
-            line_content = filepath.read_text().splitlines()[line_num - 1]
+            if filepath not in file_lines_cache:
+                file_lines_cache[filepath] = filepath.read_text().splitlines()
+            line_content = file_lines_cache[filepath][line_num - 1]
         except (OSError, IndexError):
             line_content = ""
 
-        has_related_image = bool(RELATED_IMAGE_PATTERN.search(line_content))
+        related_vars = RELATED_IMAGE_PATTERN.findall(line_content)
 
-        if not has_related_image:
+        if not related_vars:
             relative = str(filepath.relative_to(repo_root))
             severity = "info" if excluded else "warning"
             result.findings.append(Finding(
@@ -205,13 +216,52 @@ def check_env_var_pattern(repo_root: Path) -> RuleResult:
                 message=f"Image '{image}' has no RELATED_IMAGE_* mapping on this line. "
                         f"Verify it is covered by an env var elsewhere.",
             ))
+        elif manifest_env_vars is not None:
+            for var_name in related_vars:
+                if var_name not in manifest_env_vars:
+                    relative = str(filepath.relative_to(repo_root))
+                    severity = "info" if excluded else "blocker"
+                    if severity == "blocker":
+                        result.passed = False
+                    result.findings.append(Finding(
+                        severity=severity,
+                        file=relative,
+                        line=line_num,
+                        image=image,
+                        message=f"Image references '{var_name}' which does not exist "
+                                f"in the operator manifest. The operator will not inject "
+                                f"this image in disconnected environments.",
+                    ))
+
+    if manifest_env_vars is not None:
+        stale_vars = local_vars - manifest_env_vars
+        for var in sorted(stale_vars):
+            result.findings.append(Finding(
+                severity="warning",
+                file="",
+                line=0,
+                image="",
+                message=f"Env var '{var}' found in repo but not in operator manifest. "
+                        f"May be stale or renamed.",
+            ))
+
+        unused_manifest_vars = manifest_env_vars - local_vars
+        if unused_manifest_vars:
+            result.findings.append(Finding(
+                severity="info",
+                file="",
+                line=0,
+                image="",
+                message=f"{len(unused_manifest_vars)} operator manifest vars not referenced "
+                        f"in this repo (expected if this component uses a subset of images).",
+            ))
 
     return result
 
 
 def check_static_csv_pattern(repo_root: Path) -> RuleResult:
     """Check repos that use static CSV relatedImages."""
-    result = RuleResult()
+    result = RuleResult(rule="image-manifest-complete")
     related_images = extract_static_related_images(repo_root)
 
     if not related_images:
@@ -245,17 +295,21 @@ def check_static_csv_pattern(repo_root: Path) -> RuleResult:
     return result
 
 
-def run(repo_root: str) -> RuleResult:
-    """Run the image manifest completeness rule."""
+def run(repo_root: str, manifest_env_vars: set[str] | None = None) -> RuleResult:
+    """Run the image manifest completeness rule.
+
+    When manifest_env_vars is provided, the env_var pattern check will
+    cross-reference against the authoritative operator manifest.
+    """
     root = Path(repo_root)
     pattern = detect_image_pattern(root)
 
     if pattern == "env_var":
-        return check_env_var_pattern(root)
+        return check_env_var_pattern(root, manifest_env_vars=manifest_env_vars)
     elif pattern == "static_csv":
         return check_static_csv_pattern(root)
     else:
-        result = RuleResult()
+        result = RuleResult(rule="image-manifest-complete")
         result.findings.append(Finding(
             severity="info",
             file="",

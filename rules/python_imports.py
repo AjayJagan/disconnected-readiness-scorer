@@ -3,7 +3,12 @@
 
 import re
 from pathlib import Path
-from dataclasses import dataclass, field
+from typing import List, Set
+
+try:
+    from rules.common import Finding, RuleResult
+except ModuleNotFoundError:
+    from common import Finding, RuleResult
 
 GIT_DEP_PATTERN = re.compile(r'git\+https?://[^\s]+')
 PIP_INSTALL_PATTERN = re.compile(r'(?:pip|pip3)\s+install\s+([^\s]+)')
@@ -24,23 +29,7 @@ KNOWN_BUNDLED = {
 SKIP_DIRS = {".git", "vendor", "node_modules", "__pycache__", ".tox", "venv", ".venv"}
 
 
-@dataclass
-class Finding:
-    severity: str
-    file: str
-    line: int
-    image: str
-    message: str
-
-
-@dataclass
-class RuleResult:
-    rule: str = "python-imports-bundled"
-    passed: bool = True
-    findings: list = field(default_factory=list)
-
-
-def load_known_mirrors(config_path: Path) -> set[str]:
+def load_known_mirrors(config_path: Path) -> Set[str]:
     """Load additional known-bundled packages from config."""
     extras = set()
     if config_path.exists():
@@ -55,7 +44,7 @@ def load_known_mirrors(config_path: Path) -> set[str]:
     return extras
 
 
-def check_requirements_file(filepath: Path, root: Path, known: set[str]) -> list[Finding]:
+def check_requirements_file(filepath: Path, root: Path, known: Set[str]) -> List[Finding]:
     findings = []
     try:
         lines = filepath.read_text().splitlines()
@@ -99,7 +88,7 @@ def check_requirements_file(filepath: Path, root: Path, known: set[str]) -> list
     return findings
 
 
-def check_runtime_pip_installs(filepath: Path, root: Path) -> list[Finding]:
+def check_runtime_pip_installs(filepath: Path, root: Path) -> List[Finding]:
     """Check for pip install calls in Python source (not requirements files)."""
     findings = []
     try:
@@ -122,7 +111,7 @@ def check_runtime_pip_installs(filepath: Path, root: Path) -> list[Finding]:
 
 def run(repo_root: str) -> RuleResult:
     root = Path(repo_root)
-    result = RuleResult()
+    result = RuleResult(rule="python-imports-bundled")
 
     config_path = root / ".disconnected-readiness" / "known_mirrors.yaml"
     known = KNOWN_BUNDLED | load_known_mirrors(config_path)
