@@ -39,7 +39,7 @@ GO_IMAGE_ASSIGN_PATTERN = re.compile(
     r'[:=]\s*"'
     r"|export\s+\w+=\s*"
     r')'
-    r'([\w.\-]+\.[\w.\-]+(?::\d+)?/[\w.\-]+/[\w.\-]+(?:[:@][\w.\-:]+)?)'
+    r'([\w.\-]+\.[\w.\-]+(?::\d+)?/[\w.\-]+/[\w.\-]+[:@][\w.\-:]+)'
 )
 
 DIGEST_PATTERN = re.compile(r'@sha256:[a-f0-9]{64}')

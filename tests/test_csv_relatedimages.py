@@ -255,6 +255,16 @@ class TestScanForImageRefsExpanded:
         refs = scan_for_image_refs(tmp_path)
         assert len(refs) == 0
 
+    def test_bare_domain_path_not_matched(self, tmp_path):
+        """domain/path assignments without tag or digest should NOT match."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "urls.go").write_text(
+            'url := "oauth2.googleapis.com/token/refresh"'
+        )
+        refs = scan_for_image_refs(tmp_path)
+        assert len(refs) == 0
+
     def test_finds_shell_export(self, tmp_path):
         f = tmp_path / "setup.sh"
         f.write_text('export IMAGE="quay.io/opendatahub/odh-dashboard:latest"')
