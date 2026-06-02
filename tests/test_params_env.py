@@ -230,7 +230,7 @@ class TestCheckParamsEnvPattern:
         with patch("rules.params_env.kustomize_available", return_value=True), \
              patch("rules.params_env.kustomize_build", return_value="---\n"):
             result = run(str(tmp_path))
-        assert not any("IGNORED" in f.message and "mutable tag" in f.message for f in result.findings)
+        assert not any("IGNORED" in f.message and f.severity == "blocker" for f in result.findings)
 
 
 # --- run() dispatcher ---

@@ -112,8 +112,8 @@ def run(repo_root: str) -> RuleResult:
                     severity = "info"
                     msg = f"{desc} — URL appears configurable. Verify mirror support."
                 else:
-                    severity = "warning"
-                    msg = f"{desc} — verify this endpoint is reachable in disconnected environments."
+                    severity = "blocker"
+                    msg = f"{desc} — endpoint may not be reachable in disconnected environments."
 
                 if severity == "blocker":
                     result.passed = False

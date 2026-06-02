@@ -69,12 +69,12 @@ def scan_file(filepath: Path, root: Path) -> List[Finding]:
             if is_excluded_file(filepath):
                 severity = "info"
                 msg = f"{base_msg} File is excluded (test/build/CI)."
-            elif is_source_code(filepath):
-                severity = "blocker"
-                msg = f"{base_msg} Hardcoded in source code."
             else:
-                severity = "warning"
-                msg = f"{base_msg} Manifest file — may be managed by params.env/kustomize."
+                severity = "blocker"
+                if is_source_code(filepath):
+                    msg = f"{base_msg} Hardcoded in source code."
+                else:
+                    msg = f"{base_msg} Manifest file not managed by params.env."
 
             findings.append(Finding(
                 severity=severity,

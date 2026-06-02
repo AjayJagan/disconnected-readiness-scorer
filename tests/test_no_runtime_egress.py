@@ -78,14 +78,14 @@ class TestRun:
         assert result.passed is True
         assert any(f.severity == "info" for f in result.findings)
 
-    def test_go_no_hardcoded_url_is_warning(self, tmp_path):
+    def test_go_no_hardcoded_url_is_blocker(self, tmp_path):
         pkg = tmp_path / "pkg"
         pkg.mkdir()
         f = pkg / "client.go"
         f.write_text("http.Get(someVar)")
         result = run(str(tmp_path))
-        assert result.passed is True
-        assert any(f.severity == "warning" for f in result.findings)
+        assert result.passed is False
+        assert any(f.severity == "blocker" for f in result.findings)
 
     def test_python_requests_hardcoded_is_blocker(self, tmp_path):
         src = tmp_path / "src"
@@ -179,4 +179,4 @@ class TestRun:
         f.write_text('conn, err := net.Dial("tcp", "example.com:443")')
         result = run(str(tmp_path))
         assert len(result.findings) == 1
-        assert result.findings[0].severity == "warning"
+        assert result.findings[0].severity == "blocker"

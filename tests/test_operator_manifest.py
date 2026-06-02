@@ -249,12 +249,13 @@ class TestRun:
         info_msgs = [f.message for f in result.findings if f.severity == "info"]
         assert any("1 unique RELATED_IMAGE" in m for m in info_msgs)
 
-    def test_known_issues_become_warnings(self, tmp_path):
+    def test_known_issues_become_info(self, tmp_path):
         (tmp_path / COMPONENTS_PATH).mkdir(parents=True)
         (tmp_path / "component-params-env.yaml").write_text(
             "# known_issues:\n- image: RELATED_IMAGE_BROKEN\n"
         )
         result = run(str(tmp_path))
-        warn_findings = [f for f in result.findings if f.severity == "warning"]
-        assert len(warn_findings) == 1
-        assert warn_findings[0].image == "RELATED_IMAGE_BROKEN"
+        issue_findings = [f for f in result.findings
+                          if f.image == "RELATED_IMAGE_BROKEN"]
+        assert len(issue_findings) == 1
+        assert issue_findings[0].severity == "info"

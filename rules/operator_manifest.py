@@ -214,7 +214,7 @@ def run(operator_path: str) -> RuleResult:
     ))
     for issue in manifest.known_issues:
         result.findings.append(Finding(
-            severity="warning",
+            severity="info",
             file="component-params-env.yaml",
             line=0,
             image=issue,

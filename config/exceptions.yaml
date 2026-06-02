@@ -1,5 +1,5 @@
 # Exception rules for disconnected-readiness-scorer.
-# Each exception downgrades matching blocker/warning findings to info severity.
+# Each exception downgrades matching blocker findings to info severity.
 #
 # Fields:
 #   rule:   (required) Rule name or comma-separated list (e.g. "no-runtime-egress, no-image-tags")

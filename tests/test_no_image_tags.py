@@ -76,14 +76,14 @@ class TestScanFile:
         assert findings[0].severity == "blocker"
         assert ":latest" in findings[0].image
 
-    def test_tag_ref_in_manifest_is_warning(self, tmp_path):
+    def test_tag_ref_in_manifest_is_blocker(self, tmp_path):
         manifests = tmp_path / "manifests"
         manifests.mkdir()
         f = manifests / "deploy.yaml"
         f.write_text('image: quay.io/org/img:v1.0')
         findings = scan_file(f, tmp_path)
         assert len(findings) == 1
-        assert findings[0].severity == "warning"
+        assert findings[0].severity == "blocker"
 
     def test_tag_ref_in_test_dir_is_info(self, tmp_path):
         test_dir = tmp_path / "test"
@@ -195,14 +195,14 @@ class TestRun:
         assert result.findings[0].severity == "info"
         assert result.passed is True
 
-    def test_manifest_warning_keeps_passed_true(self, tmp_path):
+    def test_manifest_tag_sets_passed_false(self, tmp_path):
         manifests = tmp_path / "manifests"
         manifests.mkdir()
         f = manifests / "deploy.yaml"
         f.write_text('image: quay.io/org/img:v1.0')
         result = run(str(tmp_path))
-        assert result.passed is True
-        assert result.findings[0].severity == "warning"
+        assert result.passed is False
+        assert result.findings[0].severity == "blocker"
 
     def test_source_code_tag_sets_passed_false(self, tmp_path):
         pkg = tmp_path / "pkg"
