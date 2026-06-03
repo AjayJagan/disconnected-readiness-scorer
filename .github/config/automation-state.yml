@@ -1,0 +1,10 @@
+# DRS PR Automation State
+# This file tracks automation state to optimize subsequent runs
+#
+# WARNING: DO NOT EDIT MANUALLY
+# This file is automatically managed by the DRS PR automation system.
+# Manual changes will be overwritten and may cause automation failures.
+
+organizations: {}
+
+template_state: {}

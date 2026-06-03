@@ -1,0 +1,29 @@
+# Repository Exclusion Configuration
+#
+# This file defines repositories that should be completely excluded from
+# DRS PR automation processing. Excluded repositories will not have
+# disconnected readiness workflows created or updated.
+#
+# Format:
+#   excluded_repositories:
+#     - org/repo-name
+#
+# Examples of repositories that might be excluded:
+# - Legacy repositories that are no longer maintained
+# - Test repositories that don't need production workflows
+# - Archived projects
+# - Special-purpose repositories (documentation only, etc.)
+
+excluded_repositories:
+  # Example exclusions (uncomment and modify as needed):
+  # - opendatahub-io/legacy-repo
+  # - opendatahub-io/archived-project
+  # - opendatahub-io/internal-tool
+  # - opendatahub-io/test-repo
+  # - opendatahub-io/docs-only-repo
+
+# Notes:
+# - Repository names should be in the format "organization/repository"
+# - Changes to this file will take effect on the next automation run
+# - Excluded repositories that already have workflows will not be affected
+#   (existing workflows will remain in place)

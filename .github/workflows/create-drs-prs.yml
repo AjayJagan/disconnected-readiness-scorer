@@ -1,0 +1,105 @@
+name: DRS PR Automation
+
+# This workflow ALWAYS creates Pull Requests (never direct commits)
+# All changes go through normal PR review process for safety
+
+on:
+  # Manual execution
+  workflow_dispatch:
+    inputs:
+      organizations:
+        description: 'Comma-separated list of organizations to process'
+        required: false
+        default: 'opendatahub-io'
+      dry_run:
+        description: 'Dry run mode (analyze only, no PRs created)'
+        required: false
+        default: 'true'
+        type: choice
+        options: ['true', 'false']
+      force_full_scan:
+        description: 'Force full scan (ignore state optimization)'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['true', 'false']
+
+  # Weekly scheduled execution
+  schedule:
+    - cron: '0 9 * * 1'  # 9 AM UTC every Monday
+
+  # Template changes trigger propagation
+  push:
+    paths:
+      - '.github/templates/workflow.yml'
+    branches:
+      - main
+
+jobs:
+  drs-automation:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+    - name: Generate GitHub App Token
+      id: app-token
+      uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+      with:
+        client-id: ${{ secrets.GH_APP_DR_CLIENT_ID }}
+        private-key: ${{ secrets.GH_APP_DR_PRIVATE_KEY }}
+
+    - name: Set up Python
+      uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+      with:
+        python-version: '3.12'
+
+    - name: Install dependencies
+      run: |
+        pip install -r .github/scripts/pr_automation/requirements.txt
+
+    - name: Determine trigger context
+      id: context
+      run: |
+        if [[ "${{ github.event_name }}" == "push" ]]; then
+          echo "trigger_reason=template_change" >> $GITHUB_OUTPUT
+          echo "organizations=opendatahub-io" >> $GITHUB_OUTPUT
+          echo "dry_run=false" >> $GITHUB_OUTPUT
+          echo "force_full_scan=true" >> $GITHUB_OUTPUT
+        elif [[ "${{ github.event_name }}" == "schedule" ]]; then
+          echo "trigger_reason=scheduled" >> $GITHUB_OUTPUT
+          echo "organizations=opendatahub-io" >> $GITHUB_OUTPUT
+          echo "dry_run=false" >> $GITHUB_OUTPUT
+          echo "force_full_scan=false" >> $GITHUB_OUTPUT
+        else
+          echo "trigger_reason=manual" >> $GITHUB_OUTPUT
+          echo "organizations=${{ github.event.inputs.organizations || 'opendatahub-io' }}" >> $GITHUB_OUTPUT
+          echo "dry_run=${{ github.event.inputs.dry_run || 'true' }}" >> $GITHUB_OUTPUT
+          echo "force_full_scan=${{ github.event.inputs.force_full_scan || 'false' }}" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Run DRS PR Automation
+      env:
+        GH_APP_DR_TOKEN: ${{ steps.app-token.outputs.token }}
+        INPUT_ORGANIZATIONS: ${{ steps.context.outputs.organizations }}
+        INPUT_DRY_RUN: ${{ steps.context.outputs.dry_run }}
+        INPUT_FORCE_FULL_SCAN: ${{ steps.context.outputs.force_full_scan }}
+        TRIGGER_REASON: ${{ steps.context.outputs.trigger_reason }}
+      run: |
+        cd .github/scripts
+        PYTHONPATH=. python -m pr_automation
+
+    - name: Commit state updates
+      if: steps.context.outputs.dry_run == 'false'
+      uses: stefanzweifel/git-auto-commit-action@04702edda442b2e678b25b537cec683a1493fcb9 # v7.1.0
+      with:
+        commit_message: 'chore: update DRS automation state [skip ci]'
+        file_pattern: '.github/config/automation-state.yml'
+        commit_user_name: 'github-actions[bot]'
+        commit_user_email: '41898282+github-actions[bot]@users.noreply.github.com'
+        skip_dirty_check: false
+        skip_fetch: true
