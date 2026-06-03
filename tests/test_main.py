@@ -88,17 +88,13 @@ class TestComputeScore:
         r = RuleResult(rule="a", findings=[Finding("info", "", 0, "", "ok")])
         assert compute_score([r]) == "READY"
 
-    def test_warning(self):
-        r = RuleResult(rule="a", findings=[Finding("warning", "f", 1, "", "w")])
-        assert compute_score([r]) == "WARNING"
-
     def test_not_ready(self):
         r = RuleResult(rule="a", passed=False,
                        findings=[Finding("blocker", "f", 1, "img", "bad")])
         assert compute_score([r]) == "NOT READY"
 
-    def test_not_ready_overrides_warning(self):
-        r1 = RuleResult(rule="a", findings=[Finding("warning", "", 0, "", "w")])
+    def test_not_ready_with_mixed_rules(self):
+        r1 = RuleResult(rule="a", findings=[Finding("info", "", 0, "", "ok")])
         r2 = RuleResult(rule="b", passed=False)
         assert compute_score([r1, r2]) == "NOT READY"
 
@@ -140,17 +136,18 @@ class TestAdaptManifestResult:
         result = adapt_manifest_result(manifest)
         assert "1 RELATED_IMAGE vars" in result.findings[0].message
 
-    def test_known_issues_become_warnings(self):
+    def test_known_issues_become_info(self):
         manifest = FakeManifest(
             images=[],
             components=[],
             known_issues=["stale ref", "missing var"],
         )
         result = adapt_manifest_result(manifest)
-        assert len(result.findings) == 3  # 1 info + 2 warnings
-        warnings = [f for f in result.findings if f.severity == "warning"]
-        assert len(warnings) == 2
-        assert "stale ref" in warnings[0].message
+        assert len(result.findings) == 3  # 3 info findings
+        assert all(f.severity == "info" for f in result.findings)
+        issue_findings = [f for f in result.findings if "Known issue" in f.message]
+        assert len(issue_findings) == 2
+        assert "stale ref" in issue_findings[0].message
 
 
 # --- print_summary ---
@@ -169,18 +166,18 @@ class TestPrintSummary:
         err = capsys.readouterr().err
         assert "NOT READY" in err
         assert "PASS" in err
-        assert "BLOCKER" in err
+        assert "FAIL" in err
 
-    def test_warning_tag(self, capsys):
+    def test_pass_tag(self, capsys):
         results = [
             RuleResult(rule="r1", findings=[
-                Finding("warning", "x.py", 1, "", "needs review"),
+                Finding("info", "x.py", 1, "", "informational"),
             ]),
         ]
-        print_summary("WARNING", results)
+        print_summary("READY", results)
         err = capsys.readouterr().err
-        assert "WARNING" in err
-        assert "1 warning(s)" in err
+        assert "READY" in err
+        assert "All checks passed" in err
 
 
 # --- render_json ---
@@ -190,7 +187,7 @@ class TestRenderJson:
         results = [
             RuleResult(rule="a", passed=True, findings=[
                 Finding("blocker", "f.go", 10, "img", "msg"),
-                Finding("warning", "g.go", 20, "", "wmsg"),
+                Finding("info", "g.go", 20, "", "imsg"),
             ]),
         ]
         raw = render_json("NOT READY", results, "my-repo")
@@ -202,7 +199,7 @@ class TestRenderJson:
         assert rule["name"] == "a"
         assert rule["passed"] is True
         assert rule["blockers"] == 1
-        assert rule["warnings"] == 1
+        assert "warnings" not in rule
         assert len(rule["findings"]) == 2
 
     def test_empty_results(self):
@@ -435,10 +432,10 @@ class TestApplyExceptions:
         assert "[Exception:" in results[0].findings[0].message
         assert results[0].passed is True
 
-    def test_matching_rule_downgrades_warning(self):
+    def test_info_findings_not_targeted(self):
         results = [RuleResult(
             rule="no-runtime-egress",
-            findings=[Finding("warning", "main.go", 5, "", "configurable URL")],
+            findings=[Finding("info", "main.go", 5, "", "configurable URL")],
         )]
         exceptions = [{"rule": "no-runtime-egress", "reason": "internal only"}]
         apply_exceptions(results, exceptions, "repo")
@@ -554,45 +551,40 @@ class TestApplyExceptions:
 # --- report sorting ---
 
 class TestReportSorting:
-    def test_markdown_blockers_before_warnings(self):
+    def test_markdown_blockers_section(self):
         results = [
             RuleResult(rule="r1", passed=False, findings=[
-                Finding("warning", "w.go", 1, "", "warn msg"),
+                Finding("info", "i.go", 1, "", "info msg"),
                 Finding("blocker", "b.go", 2, "img", "block msg"),
             ]),
         ]
         output = render_markdown("NOT READY", results, "repo")
-        blockers_pos = output.index("## Blockers")
-        warnings_pos = output.index("## Warnings")
-        assert blockers_pos < warnings_pos
-        blockers_section = output[blockers_pos:warnings_pos]
-        assert "block msg" in blockers_section
-        warnings_section = output[warnings_pos:]
-        assert "warn msg" in warnings_section
+        assert "## Blockers" in output
+        assert "block msg" in output
+        assert "## Warnings" not in output
 
     def test_json_findings_sorted_by_severity(self):
         results = [
             RuleResult(rule="r", findings=[
                 Finding("info", "i.go", 1, "", "info"),
                 Finding("blocker", "b.go", 2, "", "blocker"),
-                Finding("warning", "w.go", 3, "", "warning"),
             ]),
         ]
-        data = json.loads(render_json("WARNING", results, "repo"))
+        data = json.loads(render_json("NOT READY", results, "repo"))
         severities = [f["severity"] for f in data["rules"][0]["findings"]]
-        assert severities == ["blocker", "warning", "info"]
+        assert severities == ["blocker", "info"]
 
     def test_fallback_renderer_two_for_loops(self):
         template = (
             "{% for b in blockers %}B:{{ b.msg }}{% endfor %}"
-            "{% for w in warnings %}W:{{ w.msg }}{% endfor %}"
+            "{% for i in infos %}I:{{ i.msg }}{% endfor %}"
         )
         ctx = {
             "blockers": [{"msg": "b1"}],
-            "warnings": [{"msg": "w1"}, {"msg": "w2"}],
+            "infos": [{"msg": "i1"}, {"msg": "i2"}],
         }
         result = _render_template_simple(template, ctx)
-        assert result == "B:b1W:w1\nW:w2"
+        assert result == "B:b1I:i1\nI:i2"
 
 
 # --- parse_args exceptions flag ---

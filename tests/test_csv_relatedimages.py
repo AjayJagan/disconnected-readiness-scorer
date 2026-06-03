@@ -318,8 +318,8 @@ class TestFileLevelAwareness:
         assert image_findings[0].severity == "info"
         assert "sibling" in image_findings[0].message
 
-    def test_no_related_image_nearby_is_warning(self, tmp_path):
-        """Image in isolated file with no RELATED_IMAGE nearby -> warning."""
+    def test_no_related_image_nearby_is_blocker(self, tmp_path):
+        """Image in isolated file with no RELATED_IMAGE nearby -> blocker."""
         pkg = tmp_path / "pkg"
         pkg.mkdir()
         (pkg / "images.go").write_text('"RELATED_IMAGE_FOO"')
@@ -329,7 +329,8 @@ class TestFileLevelAwareness:
         result = check_env_var_pattern(tmp_path)
         orphan_findings = [f for f in result.findings if "orphan" in f.image]
         assert len(orphan_findings) == 1
-        assert orphan_findings[0].severity == "warning"
+        assert orphan_findings[0].severity == "blocker"
+        assert result.passed is False
 
     def test_yaml_no_dir_level_awareness(self, tmp_path):
         """YAML files should NOT benefit from directory-level Go heuristic."""
@@ -341,7 +342,7 @@ class TestFileLevelAwareness:
         yaml_findings = [f for f in result.findings
                          if f.file.endswith("config.yaml") and f.image]
         for finding in yaml_findings:
-            assert finding.severity == "warning"
+            assert finding.severity == "blocker"
 
     def test_file_var_in_manifest_stays_info(self, tmp_path):
         """Nearby var that IS in manifest -> info (trusted coverage)."""
@@ -359,7 +360,7 @@ class TestFileLevelAwareness:
         assert img_findings[0].severity == "info"
 
     def test_file_var_not_in_manifest_escalates(self, tmp_path):
-        """Nearby var NOT in manifest -> warning (not trusted)."""
+        """Nearby var NOT in manifest -> blocker (image won't be mirrored)."""
         pkg = tmp_path / "pkg"
         pkg.mkdir()
         (pkg / "images.go").write_text(
@@ -371,10 +372,10 @@ class TestFileLevelAwareness:
         img_findings = [f for f in result.findings
                         if f.image == "quay.io/org/fallback:v1"]
         assert len(img_findings) == 1
-        assert img_findings[0].severity == "warning"
+        assert img_findings[0].severity == "blocker"
 
     def test_sibling_var_not_in_manifest_escalates(self, tmp_path):
-        """Sibling dir var NOT in manifest -> warning."""
+        """Sibling dir var NOT in manifest -> blocker."""
         pkg = tmp_path / "pkg"
         pkg.mkdir()
         (pkg / "envvars.go").write_text('os.Getenv("RELATED_IMAGE_FOO")')
@@ -384,7 +385,7 @@ class TestFileLevelAwareness:
         img_findings = [f for f in result.findings
                         if f.image == "quay.io/org/img:v1"]
         assert len(img_findings) == 1
-        assert img_findings[0].severity == "warning"
+        assert img_findings[0].severity == "blocker"
 
 
     def test_test_file_sibling_does_not_downgrade(self, tmp_path):
@@ -397,7 +398,7 @@ class TestFileLevelAwareness:
         img_findings = [f for f in result.findings
                         if f.image == "quay.io/org/img:v1"]
         assert len(img_findings) == 1
-        assert img_findings[0].severity == "warning"
+        assert img_findings[0].severity == "blocker"
 
     def test_unreadable_sibling_produces_info(self, tmp_path):
         """Binary/unreadable sibling .go file produces an info finding."""
@@ -440,14 +441,15 @@ class TestCheckEnvVarPattern:
         info = [f for f in result.findings if f.severity == "info"]
         assert any("validated against" in f.message for f in info)
 
-    def test_unmapped_image_is_warning(self, tmp_path):
+    def test_unmapped_image_is_blocker(self, tmp_path):
         pkg = tmp_path / "pkg"
         pkg.mkdir()
         (pkg / "images.go").write_text('"RELATED_IMAGE_FOO"')
         (tmp_path / "deploy.yaml").write_text("image: quay.io/org/unmapped:v1")
         result = check_env_var_pattern(tmp_path)
-        warnings = [f for f in result.findings if f.severity == "warning"]
-        assert any("no RELATED_IMAGE_*" in f.message for f in warnings)
+        blockers = [f for f in result.findings if f.severity == "blocker"]
+        assert any("no RELATED_IMAGE_*" in f.message for f in blockers)
+        assert result.passed is False
 
     def test_unmapped_image_in_excluded_is_info(self, tmp_path):
         pkg = tmp_path / "pkg"
@@ -486,15 +488,16 @@ class TestCheckEnvVarPattern:
         assert all(f.severity == "info" for f in test_findings)
         assert result.passed is True
 
-    def test_stale_vars_warning(self, tmp_path):
+    def test_stale_vars_blocker(self, tmp_path):
         pkg = tmp_path / "pkg"
         pkg.mkdir()
         (pkg / "images.go").write_text('"RELATED_IMAGE_STALE"')
         result = check_env_var_pattern(
             tmp_path, manifest_env_vars={"RELATED_IMAGE_OTHER"}
         )
-        warnings = [f for f in result.findings if f.severity == "warning"]
-        assert any("stale" in f.message.lower() for f in warnings)
+        blockers = [f for f in result.findings if f.severity == "blocker"]
+        assert any("not in operator manifest" in f.message for f in blockers)
+        assert result.passed is False
 
     def test_unused_manifest_vars_info(self, tmp_path):
         pkg = tmp_path / "pkg"
@@ -518,10 +521,11 @@ class TestCheckEnvVarPattern:
 
 
 class TestCheckStaticCsvPattern:
-    def test_empty_related_images_warning(self, tmp_path):
+    def test_empty_related_images_blocker(self, tmp_path):
         result = check_static_csv_pattern(tmp_path)
-        warnings = [f for f in result.findings if f.severity == "warning"]
-        assert any("empty or unparseable" in f.message for f in warnings)
+        blockers = [f for f in result.findings if f.severity == "blocker"]
+        assert any("empty or unparseable" in f.message for f in blockers)
+        assert result.passed is False
 
     def test_missing_image_is_blocker(self, tmp_path):
         f = tmp_path / "csv.yaml"

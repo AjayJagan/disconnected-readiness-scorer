@@ -27,6 +27,8 @@ KNOWN_BUNDLED = {
 }
 
 SKIP_DIRS = {".git", "vendor", "node_modules", "__pycache__", ".tox", "venv", ".venv"}
+TEST_DIRS = {"test", "tests", "testdata", "e2e"}
+TEST_SUFFIXES = {"_test.py"}
 
 
 def load_known_mirrors(config_path: Path) -> Set[str]:
@@ -75,9 +77,8 @@ def check_requirements_file(filepath: Path, root: Path, known: Set[str]) -> List
             pkg_name = pkg_match.group(1).lower().replace("-", "_").replace(".", "_")
             normalized_known = {k.lower().replace("-", "_").replace(".", "_") for k in known}
             if pkg_name not in normalized_known and len(pkg_name) > 1:
-                is_test_req = "test" in filepath.name.lower() or "dev" in filepath.name.lower()
                 findings.append(Finding(
-                    severity="warning" if is_test_req else "info",
+                    severity="info",
                     file=str(filepath.relative_to(root)),
                     line=i,
                     image="",
@@ -88,6 +89,13 @@ def check_requirements_file(filepath: Path, root: Path, known: Set[str]) -> List
     return findings
 
 
+def _is_test_file(filepath: Path) -> bool:
+    """Check if a file is in a test directory or has a test suffix."""
+    if any(d in filepath.parts for d in TEST_DIRS):
+        return True
+    return any(filepath.name.endswith(s) for s in TEST_SUFFIXES)
+
+
 def check_runtime_pip_installs(filepath: Path, root: Path) -> List[Finding]:
     """Check for pip install calls in Python source (not requirements files)."""
     findings = []
@@ -96,14 +104,19 @@ def check_runtime_pip_installs(filepath: Path, root: Path) -> List[Finding]:
     except (OSError, UnicodeDecodeError):
         return findings
 
+    excluded = _is_test_file(filepath)
     for i, line in enumerate(lines, 1):
         if SUBPROCESS_PIP.search(line) or PIP_INSTALL_PATTERN.search(line):
+            severity = "info" if excluded else "blocker"
+            msg = "Runtime pip install detected — will fail without internet or internal mirror."
+            if excluded:
+                msg += " File is excluded (test)."
             findings.append(Finding(
-                severity="blocker",
+                severity=severity,
                 file=str(filepath.relative_to(root)),
                 line=i,
                 image="",
-                message="Runtime pip install detected — will fail without internet or internal mirror.",
+                message=msg,
             ))
 
     return findings

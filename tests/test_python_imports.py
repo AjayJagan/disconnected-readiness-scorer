@@ -54,19 +54,19 @@ class TestCheckRequirementsFile:
         assert len(findings) == 1
         assert findings[0].severity == "info"
 
-    def test_unknown_package_in_test_req_is_warning(self, tmp_path):
+    def test_unknown_package_in_test_req_is_info(self, tmp_path):
         f = tmp_path / "test-requirements.txt"
         f.write_text("my-test-lib==1.0\n")
         findings = check_requirements_file(f, tmp_path, KNOWN_BUNDLED)
         assert len(findings) == 1
-        assert findings[0].severity == "warning"
+        assert findings[0].severity == "info"
 
-    def test_unknown_package_in_dev_req_is_warning(self, tmp_path):
+    def test_unknown_package_in_dev_req_is_info(self, tmp_path):
         f = tmp_path / "dev-requirements.txt"
         f.write_text("my-dev-lib==1.0\n")
         findings = check_requirements_file(f, tmp_path, KNOWN_BUNDLED)
         assert len(findings) == 1
-        assert findings[0].severity == "warning"
+        assert findings[0].severity == "info"
 
     def test_comment_lines_skipped(self, tmp_path):
         f = tmp_path / "requirements.txt"
@@ -138,6 +138,24 @@ class TestCheckRuntimePipInstalls:
         f.write_bytes(b'\x80\x81\x82' * 100)
         findings = check_runtime_pip_installs(f, tmp_path)
         assert findings == []
+
+    def test_pip_install_in_test_dir_is_info(self, tmp_path):
+        test_dir = tmp_path / "tests"
+        test_dir.mkdir()
+        f = test_dir / "conftest.py"
+        f.write_text("subprocess.run('pip install test-pkg', shell=True)")
+        findings = check_runtime_pip_installs(f, tmp_path)
+        assert len(findings) == 1
+        assert findings[0].severity == "info"
+
+    def test_pip_install_in_e2e_dir_is_info(self, tmp_path):
+        e2e = tmp_path / "e2e"
+        e2e.mkdir()
+        f = e2e / "setup.py"
+        f.write_text("os.system('pip3 install torch')")
+        findings = check_runtime_pip_installs(f, tmp_path)
+        assert len(findings) == 1
+        assert findings[0].severity == "info"
 
 
 class TestRun:

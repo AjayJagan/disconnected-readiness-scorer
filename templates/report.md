@@ -6,10 +6,10 @@
 
 ## Summary
 
-| Rule | Result | Blockers | Warnings |
-|------|--------|----------|----------|
+| Rule | Result | Blockers |
+|------|--------|----------|
 {% for rule in rules %}
-| {{ rule.name }} | {{ rule.result }} | {{ rule.blockers }} | {{ rule.warnings }} |
+| {{ rule.name }} | {{ rule.result }} | {{ rule.blockers }} |
 {% endfor %}
 
 ## Blockers
@@ -17,14 +17,6 @@
 | Rule | File | Line | Message |
 |------|------|------|---------|
 {% for f in blockers %}
-| {{ f.rule }} | {{ f.file }} | {{ f.line }} | {{ f.message }} |
-{% endfor %}
-
-## Warnings
-
-| Rule | File | Line | Message |
-|------|------|------|---------|
-{% for f in warnings %}
 | {{ f.rule }} | {{ f.file }} | {{ f.line }} | {{ f.message }} |
 {% endfor %}
 

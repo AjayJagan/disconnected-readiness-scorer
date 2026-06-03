@@ -19,7 +19,7 @@ from pathlib import Path
 
 from rules.common import Finding, RuleResult
 
-SEVERITY_ORDER = {"blocker": 0, "warning": 1, "info": 2}
+SEVERITY_ORDER = {"blocker": 0, "info": 1}
 
 RULE_REGISTRY = {
     "csv": {
@@ -100,10 +100,10 @@ def load_exceptions(config_path):
 
 
 def apply_exceptions(results, exceptions, repo_name):
-    """Downgrade findings that match configured exceptions to info severity."""
+    """Downgrade blocker findings that match configured exceptions to info severity."""
     for result in results:
         for finding in result.findings:
-            if finding.severity not in ("blocker", "warning"):
+            if finding.severity != "blocker":
                 continue
             for exc in exceptions:
                 exc_rules = [r.strip() for r in exc.get("rule", "").split(",")]
@@ -216,7 +216,7 @@ def adapt_manifest_result(manifest):
     if manifest.known_issues:
         for issue in manifest.known_issues:
             result.findings.append(Finding(
-                severity="warning",
+                severity="info",
                 file="",
                 line=0,
                 image="",
@@ -228,9 +228,6 @@ def adapt_manifest_result(manifest):
 def compute_score(results):
     if any(not r.passed for r in results):
         return "NOT READY"
-    all_findings = [f for r in results for f in r.findings]
-    if any(f.severity == "warning" for f in all_findings):
-        return "WARNING"
     return "READY"
 
 
@@ -238,29 +235,19 @@ def print_summary(score, results):
     print(f"\nDisconnected Readiness Score: {score}\n", file=sys.stderr)
     for r in results:
         blockers = sum(1 for f in r.findings if f.severity == "blocker")
-        warnings = sum(1 for f in r.findings if f.severity == "warning")
 
         if blockers:
-            tag = "BLOCKER"
-        elif warnings:
-            tag = "WARNING"
+            tag = "FAIL"
+            summary_msg = f"{blockers} blocker(s)"
         else:
             tag = "PASS"
-
-        summary_msg = ""
-        if blockers:
-            summary_msg = f"{blockers} blocker(s)"
-        elif warnings:
-            summary_msg = f"{warnings} warning(s)"
-        else:
             summary_msg = "All checks passed"
 
         print(f"  {tag:<9} {r.rule:<25} {summary_msg}", file=sys.stderr)
 
     total_blockers = sum(1 for r in results for f in r.findings if f.severity == "blocker")
-    total_warnings = sum(1 for r in results for f in r.findings if f.severity == "warning")
     total_passed = sum(1 for r in results if r.passed)
-    print(f"\nBlockers: {total_blockers} | Warnings: {total_warnings} | Passed: {total_passed}", file=sys.stderr)
+    print(f"\nBlockers: {total_blockers} | Passed: {total_passed}", file=sys.stderr)
 
 
 def render_json(score, results, repo_name):
@@ -273,7 +260,6 @@ def render_json(score, results, repo_name):
                 "name": r.rule,
                 "passed": r.passed,
                 "blockers": sum(1 for f in r.findings if f.severity == "blocker"),
-                "warnings": sum(1 for f in r.findings if f.severity == "warning"),
                 "findings": [
                     {"severity": f.severity, "file": f.file, "line": f.line,
                      "image": f.image, "message": f.message}
@@ -357,19 +343,15 @@ def render_markdown(score, results, repo_name):
         return f"# Disconnected Readiness Report\n\n**Score:** {score}\n"
 
     blocker_rows = []
-    warning_rows = []
     for r in results:
         for f in r.findings:
-            row = {
-                "rule": _escape_md_cell(r.rule),
-                "file": _escape_md_cell(f.file),
-                "line": f.line,
-                "message": _escape_md_cell(f.message),
-            }
             if f.severity == "blocker":
-                blocker_rows.append(row)
-            elif f.severity == "warning":
-                warning_rows.append(row)
+                blocker_rows.append({
+                    "rule": _escape_md_cell(r.rule),
+                    "file": _escape_md_cell(f.file),
+                    "line": f.line,
+                    "message": _escape_md_cell(f.message),
+                })
 
     context = {
         "repo_name": repo_name,
@@ -380,12 +362,10 @@ def render_markdown(score, results, repo_name):
                 "name": r.rule,
                 "result": "PASS" if r.passed else "FAIL",
                 "blockers": sum(1 for f in r.findings if f.severity == "blocker"),
-                "warnings": sum(1 for f in r.findings if f.severity == "warning"),
             }
             for r in results
         ],
         "blockers": blocker_rows,
-        "warnings": warning_rows,
     }
 
     try:

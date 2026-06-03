@@ -113,7 +113,7 @@ def run(repo_root: str, manifest_env_vars: set[str] | None = None) -> RuleResult
                 probe_rendered = kustomize_build(tmp_overlay)
         except RuntimeError as e:
             result.findings.append(Finding(
-                severity="warning",
+                severity="info",
                 file=str(overlay_dir.relative_to(root)),
                 line=0, image="",
                 message=f"kustomize build failed for overlay: {e}",
@@ -140,7 +140,7 @@ def run(repo_root: str, manifest_env_vars: set[str] | None = None) -> RuleResult
             original_rendered = kustomize_build(overlay_dir)
         except RuntimeError as e:
             result.findings.append(Finding(
-                severity="warning",
+                severity="info",
                 file=str(overlay_dir.relative_to(root)),
                 line=0, image="",
                 message=f"kustomize build failed for original overlay, "
@@ -153,18 +153,20 @@ def run(repo_root: str, manifest_env_vars: set[str] | None = None) -> RuleResult
         wired_keys = ref_keys | replacement_keys
 
         for key in sorted(active_keys - wired_keys):
+            result.passed = False
             result.findings.append(Finding(
-                severity="warning",
+                severity="blocker",
                 file=str(overlay_dir.relative_to(root) / "params.env"),
                 line=0, image="",
                 message=f"params.env key '{key}' is not consumed by kustomize "
-                        f"(no configMapKeyRef or replacement). Image may not be injected.",
+                        f"(no configMapKeyRef or replacement). Image will not be injected "
+                        f"in disconnected environments.",
             ))
 
         for key in sorted(ref_keys):
             if key not in overlay_params:
                 result.findings.append(Finding(
-                    severity="warning",
+                    severity="info",
                     file=str(overlay_dir.relative_to(root)),
                     line=0, image="",
                     message=f"configMapKeyRef references '{key}' which is not a "
@@ -181,7 +183,7 @@ def run(repo_root: str, manifest_env_vars: set[str] | None = None) -> RuleResult
 
         for var in sorted(manifest_related_vars - go_env_vars):
             result.findings.append(Finding(
-                severity="warning",
+                severity="info",
                 file="", line=0, image="",
                 message=f"RELATED_IMAGE var '{var}' is in rendered manifests but Go code "
                         f"never calls os.Getenv for it. Controller may ignore this image.",
@@ -224,7 +226,7 @@ def run(repo_root: str, manifest_env_vars: set[str] | None = None) -> RuleResult
         for env_name in sorted(env_mappings_set - manifest_env_vars):
             if not env_name.startswith("RELATED_IMAGE_"):
                 result.findings.append(Finding(
-                    severity="warning",
+                    severity="info",
                     file="", line=0, image="",
                     message=f"params.env-mapped var '{env_name}' not in operator manifest. "
                             f"May be stale or renamed.",

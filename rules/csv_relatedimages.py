@@ -319,14 +319,16 @@ def check_env_var_pattern(
                             f"Likely covered by env var injection.",
                 ))
             else:
-                severity = "info" if excluded else "warning"
+                severity = "info" if excluded else "blocker"
+                if severity == "blocker":
+                    result.passed = False
                 result.findings.append(Finding(
                     severity=severity,
                     file=relative,
                     line=line_num,
                     image=image,
                     message=f"Image '{image}' has no RELATED_IMAGE_* mapping on this line. "
-                            f"Verify it is covered by an env var elsewhere.",
+                            f"Will not be mirrored in disconnected environments.",
                 ))
         elif manifest_env_vars is not None:
             for var_name in related_vars:
@@ -348,13 +350,14 @@ def check_env_var_pattern(
     if manifest_env_vars is not None:
         stale_vars = local_vars - manifest_env_vars
         for var in sorted(stale_vars):
+            result.passed = False
             result.findings.append(Finding(
-                severity="warning",
+                severity="blocker",
                 file="",
                 line=0,
                 image="",
                 message=f"Env var '{var}' found in repo but not in operator manifest. "
-                        f"May be stale or renamed.",
+                        f"Operator will not inject this image in disconnected environments.",
             ))
 
         unused_manifest_vars = manifest_env_vars - local_vars
@@ -377,12 +380,14 @@ def check_static_csv_pattern(repo_root: Path, tracked: set[Path] | None = None) 
     related_images = extract_static_related_images(repo_root)
 
     if not related_images:
+        result.passed = False
         result.findings.append(Finding(
-            severity="warning",
+            severity="blocker",
             file="",
             line=0,
             image="",
-            message="CSV found but relatedImages section is empty or unparseable.",
+            message="CSV found but relatedImages section is empty or unparseable. "
+                    "No images can be verified for disconnected mirroring.",
         ))
 
     image_refs = scan_for_image_refs(repo_root, tracked=tracked)
