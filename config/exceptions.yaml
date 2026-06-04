@@ -2,24 +2,100 @@
 # Each exception downgrades matching blocker findings to info severity.
 #
 # Fields:
-#   rule:   (required) Rule name or comma-separated list (e.g. "no-runtime-egress, no-image-tags")
-#   path:   (optional) Glob pattern matched against finding file path (e.g. "frontend/*.ts")
-#   image:  (optional) Glob pattern matched against finding image ref (e.g. "quay.io/org/img:*")
-#   message: (optional) Substring match against finding message (e.g. "http.DefaultClient")
-#   repo:   (optional) Repository name filter (matches basename or org/repo form)
-#   reason: (required) Why this exception exists
-#
-# Examples:
-# - rule: no-runtime-egress
-#   path: "frontend/src/utilities/fetch.ts"
-#   reason: "Uses cluster-internal API proxy, not external egress"
-#
-# - rule: no-image-tags
-#   path: "test/*"
-#   reason: "Test fixtures use mutable tags intentionally"
-#
-# - rule: no-runtime-egress
-#   repo: opendatahub-io/odh-dashboard
-#   reason: "Dashboard proxies all external calls through the backend"
+#   rule:    (required) Rule name, comma-separated list, or "*" for all rules
+#   path:    (optional) Glob pattern matched against finding file path
+#   paths:   (optional) List of glob patterns — matches if ANY pattern matches
+#   image:   (optional) Glob pattern matched against finding image ref
+#   message: (optional) Substring match against finding message
+#   repo:    (optional) Repository name filter (matches basename or org/repo form)
+#   reason:  (required) Why this exception exists
 
-exceptions: []
+exceptions:
+  # Test directories
+  - rule: "*"
+    paths:
+      - "test/**"
+      - "tests/**"
+      - "testdata/**"
+      - "**/testdata/**"
+      - "testing/**"
+      - "e2e/**"
+      - "mocks/**"
+      - "contract-tests/**"
+      - "hack/**"
+    reason: "Test/dev directory — not deployed in production"
+
+  # Test file patterns
+  - rule: "*"
+    paths:
+      - "*_test.go"
+      - "*_int_test.go"
+      - "*_internal_test.go"
+      - "*_mock.go"
+      - "mock_*.go"
+      - "*_fake.go"
+      - "fake_*.go"
+      - "test_*.py"
+      - "*.test.ts"
+      - "*.test.tsx"
+      - "*.spec.ts"
+      - "*.spec.tsx"
+    reason: "Test/mock file"
+
+  # Test fixtures and recordings
+  - rule: "*"
+    paths:
+      - "**/recordings/**"
+      - "**/snapshots/**"
+      - "**/*.snap.json"
+    reason: "Test fixtures and recordings — not deployed in production"
+
+  # Test kustomize overlays
+  - rule: "*"
+    paths:
+      - "config/overlays/test/**"
+      - "config/overlays/test-*/**"
+      - "config/overlays/testing/**"
+      - "config/overlays/kind-tests/**"
+      - "config/overlays/odh-test/**"
+      - "config/samples/**"
+    reason: "Test/sample configuration overlays — not deployed in production"
+
+  # CI directories
+  - rule: "*"
+    paths:
+      - ".github/**"
+      - ".tekton/**"
+      - ".buildkite/**"
+      - "ci/**"
+    reason: "CI config — not deployed in production"
+
+  # Non-production directories
+  - rule: "*"
+    paths:
+      - "docs/**"
+      - "examples/**"
+      - "samples/**"
+      - "demo/**"
+    reason: "Non-production content — not deployed in production"
+
+  # Scorecard config
+  - rule: "image-manifest-complete, no-image-tags"
+    path: "config/scorecard/**"
+    reason: "OLM scorecard config — test images, not production"
+
+  # Build files
+  - rule: "*"
+    paths:
+      - "**/Dockerfile"
+      - "**/*.Dockerfile"
+      - "**/Containerfile"
+    reason: "Build file — build-time only"
+
+  # Lint config
+  - rule: "*"
+    paths:
+      - "**/semgrep.yaml"
+      - "**/semgrep.yml"
+      - "**/.semgrep.yml"
+    reason: "Linter config — not runtime"

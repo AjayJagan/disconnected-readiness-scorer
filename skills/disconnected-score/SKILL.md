@@ -68,7 +68,7 @@ Blockers: 1 | Warnings: 1 | Passed: 2
 
 ## Rules
 
-### csv-relatedimages-complete
+### image-manifest-complete
 
 Parses Dockerfiles, Helm charts, kustomize overlays, Go/Python source, and YAML manifests for container image references. Compares against:
 

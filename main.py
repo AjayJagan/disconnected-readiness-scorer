@@ -6,7 +6,6 @@ an aggregate READY / WARNING / NOT READY score.
 """
 
 import argparse
-import fnmatch
 import importlib
 import json
 import os
@@ -14,16 +13,18 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import date
 from pathlib import Path
 
 from rules.common import Finding, RuleResult
+from rules.production_scope import compute_production_scope
 
 SEVERITY_ORDER = {"blocker": 0, "info": 1}
 
 RULE_REGISTRY = {
     "csv": {
-        "module": "rules.csv_relatedimages",
+        "module": "rules.image_manifest_complete",
         "name": "image-manifest-complete",
         "needs_manifest": True,
     },
@@ -99,6 +100,22 @@ def load_exceptions(config_path):
     return exceptions
 
 
+def _path_matches(filepath: str, pattern: str) -> bool:
+    """Match a file path against a glob pattern.
+
+    Handles ``**/X`` patterns by also matching ``X`` at the root level
+    (fnmatch does not expand ``**`` as a recursive wildcard).
+    Also matches against the filename alone for suffix patterns like ``*_test.go``.
+    """
+    from fnmatch import fnmatch
+    if fnmatch(filepath, pattern):
+        return True
+    if pattern.startswith("**/"):
+        if fnmatch(filepath, pattern[3:]):
+            return True
+    return fnmatch(filepath.rsplit("/", 1)[-1], pattern)
+
+
 def apply_exceptions(results, exceptions, repo_name):
     """Downgrade blocker findings that match configured exceptions to info severity."""
     for result in results:
@@ -106,9 +123,11 @@ def apply_exceptions(results, exceptions, repo_name):
             if finding.severity != "blocker":
                 continue
             for exc in exceptions:
-                exc_rules = [r.strip() for r in exc.get("rule", "").split(",")]
-                if result.rule not in exc_rules:
-                    continue
+                exc_rule = exc.get("rule", "")
+                if exc_rule != "*":
+                    exc_rules = [r.strip() for r in exc_rule.split(",")]
+                    if result.rule not in exc_rules:
+                        continue
                 exc_repo = exc.get("repo")
                 if exc_repo:
                     if "/" in exc_repo:
@@ -117,15 +136,23 @@ def apply_exceptions(results, exceptions, repo_name):
                     else:
                         if exc_repo != repo_name.rsplit("/", 1)[-1]:
                             continue
+                exc_paths = exc.get("paths") or []
                 exc_path = exc.get("path")
-                if exc_path and not fnmatch.fnmatch(finding.file, exc_path):
-                    continue
+                if exc_path:
+                    exc_paths = exc_paths + [exc_path]
+                if exc_paths:
+                    if not any(_path_matches(finding.file, p) for p in exc_paths):
+                        continue
                 exc_image = exc.get("image")
-                if exc_image and not fnmatch.fnmatch(finding.image, exc_image):
-                    continue
+                if exc_image:
+                    from fnmatch import fnmatch
+                    if not fnmatch(finding.image, exc_image):
+                        continue
                 exc_message = exc.get("message")
-                if exc_message and exc_message not in finding.message:
-                    continue
+                if exc_message:
+                    from fnmatch import fnmatch
+                    if not fnmatch(finding.message, exc_message):
+                        continue
                 reason = exc.get("reason", "configured exception")
                 finding.message += f" [Exception: {reason}]"
                 finding.severity = "info"
@@ -165,6 +192,15 @@ def parse_args(argv=None):
     parser.add_argument(
         "--exceptions",
         help="Path to exceptions.yaml (default: config/exceptions.yaml).",
+    )
+    parser.add_argument(
+        "--no-production-scope", action="store_true",
+        help="Disable production-scope analysis (Dockerfile + go list). "
+             "All files are scanned at full severity.",
+    )
+    parser.add_argument(
+        "--timing", action="store_true",
+        help="Print per-step wall time to stderr for performance debugging.",
     )
     return parser.parse_args(argv)
 
@@ -260,6 +296,7 @@ def render_json(score, results, repo_name):
                 "name": r.rule,
                 "passed": r.passed,
                 "blockers": sum(1 for f in r.findings if f.severity == "blocker"),
+                "infos": sum(1 for f in r.findings if f.severity == "info"),
                 "findings": [
                     {"severity": f.severity, "file": f.file, "line": f.line,
                      "image": f.image, "message": f.message}
@@ -349,7 +386,7 @@ def render_markdown(score, results, repo_name):
                 blocker_rows.append({
                     "rule": _escape_md_cell(r.rule),
                     "file": _escape_md_cell(f.file),
-                    "line": f.line,
+                    "line": f.line if f.line else "",
                     "message": _escape_md_cell(f.message),
                 })
 
@@ -402,6 +439,13 @@ def _run(args, operator_path):
     repo_root = os.path.abspath(args.repo_root)
     repo_name = _get_repo_name(repo_root)
     selected = resolve_rules(args.rules)
+    timing = getattr(args, "timing", False)
+
+    def _tlog(label, elapsed):
+        if timing:
+            print(f"  [timing] {label}: {elapsed:.1f}s", file=sys.stderr)
+
+    t_total = time.monotonic()
 
     manifest = None
     manifest_env_vars = None
@@ -422,7 +466,43 @@ def _run(args, operator_path):
                 break
 
     if need_manifest:
+        t0 = time.monotonic()
         manifest, manifest_env_vars = load_manifest(operator_path)
+        _tlog("load_manifest", time.monotonic() - t0)
+
+    prod_scope = None
+    if not getattr(args, "no_production_scope", False):
+        t0 = time.monotonic()
+        manifest_source_folders = None
+        try:
+            op_manifest_mod = importlib.import_module("rules.operator_manifest")
+            if hasattr(op_manifest_mod, "parse_component_manifest_mapping"):
+                mapping = op_manifest_mod.parse_component_manifest_mapping(operator_path)
+                repo_basename = os.path.basename(repo_root)
+                manifest_source_folders = mapping.get(repo_basename)
+                if manifest_source_folders:
+                    print(
+                        f"  Operator mapping: {repo_basename} → {manifest_source_folders}",
+                        file=sys.stderr,
+                    )
+        except Exception:
+            pass
+
+        prod_scope = compute_production_scope(
+            Path(repo_root),
+            manifest_source_folders=manifest_source_folders,
+        )
+        _tlog("production_scope", time.monotonic() - t0)
+        if prod_scope:
+            parts = []
+            if prod_scope.production_files:
+                parts.append(f"go={len(prod_scope.production_files)} files")
+            if prod_scope.manifest_files:
+                parts.append(f"manifests={len(prod_scope.manifest_files)} files")
+            print(
+                f"  Production scope: {prod_scope.method} ({', '.join(parts)})",
+                file=sys.stderr,
+            )
 
     results = []
     for key in selected:
@@ -430,15 +510,21 @@ def _run(args, operator_path):
         mod = importlib.import_module(entry["module"])
 
         if entry.get("is_manifest_rule"):
+            t0 = time.monotonic()
             if manifest is None:
                 manifest, manifest_env_vars = load_manifest(operator_path)
             results.append(adapt_manifest_result(manifest))
+            _tlog(f"rule {key}", time.monotonic() - t0)
             continue
 
+        kwargs = {}
         if key in ("csv", "params_env") and manifest_env_vars is not None:
-            result = mod.run(repo_root, manifest_env_vars=manifest_env_vars)
-        else:
-            result = mod.run(repo_root)
+            kwargs["manifest_env_vars"] = manifest_env_vars
+        if prod_scope is not None:
+            kwargs["production_scope"] = prod_scope
+        t0 = time.monotonic()
+        result = mod.run(repo_root, **kwargs)
+        _tlog(f"rule {key}", time.monotonic() - t0)
         results.append(result)
 
     exceptions_path = args.exceptions or str(Path(__file__).parent / "config" / "exceptions.yaml")
@@ -460,6 +546,7 @@ def _run(args, operator_path):
     else:
         print(report)
 
+    _tlog("total", time.monotonic() - t_total)
     return 0 if score != "NOT READY" else 1
 
 

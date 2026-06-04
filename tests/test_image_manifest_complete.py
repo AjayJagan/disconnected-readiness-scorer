@@ -1,32 +1,13 @@
-"""Tests for rules/csv_relatedimages.py"""
+"""Tests for rules/image_manifest_complete.py"""
 
 from pathlib import Path
 
-from rules.csv_relatedimages import (
-    is_excluded_file, normalize_image, detect_image_pattern,
+from rules.image_manifest_complete import (
+    normalize_image, detect_image_pattern,
     extract_related_image_vars, extract_static_related_images,
     scan_for_image_refs, check_env_var_pattern, check_static_csv_pattern, run,
+    check_unmanaged_images,
 )
-
-
-class TestIsExcludedFile:
-    def test_semgrep_yaml(self):
-        assert is_excluded_file(Path("semgrep.yaml")) is True
-
-    def test_test_suffix(self):
-        assert is_excluded_file(Path("pkg/foo_test.go")) is True
-
-    def test_e2e_dir(self):
-        assert is_excluded_file(Path("e2e/suite.go")) is True
-
-    def test_ci_dir(self):
-        assert is_excluded_file(Path(".github/workflow.yaml")) is True
-
-    def test_hack_dir(self):
-        assert is_excluded_file(Path("hack/script.go")) is True
-
-    def test_regular_file(self):
-        assert is_excluded_file(Path("pkg/main.go")) is False
 
 
 class TestNormalizeImage:
@@ -103,17 +84,18 @@ class TestExtractRelatedImageVars:
         (pkg / "util.go").write_text('"RELATED_IMAGE_*"')
         assert extract_related_image_vars(tmp_path) == set()
 
-    def test_skips_test_files(self, tmp_path):
+    def test_includes_test_files(self, tmp_path):
         pkg = tmp_path / "pkg"
         pkg.mkdir()
         (pkg / "foo_test.go").write_text('"RELATED_IMAGE_FOO"')
-        assert extract_related_image_vars(tmp_path) == set()
+        assert extract_related_image_vars(tmp_path) == {"RELATED_IMAGE_FOO"}
 
-    def test_skips_excluded_dirs(self, tmp_path):
+    def test_includes_test_dirs(self, tmp_path):
+        """Non-test .go files in test dirs are still scanned for var extraction."""
         e2e = tmp_path / "e2e"
         e2e.mkdir()
         (e2e / "setup.go").write_text('"RELATED_IMAGE_FOO"')
-        assert extract_related_image_vars(tmp_path) == set()
+        assert extract_related_image_vars(tmp_path) == {"RELATED_IMAGE_FOO"}
 
     def test_skips_vendor(self, tmp_path):
         vendor = tmp_path / "vendor"
@@ -388,8 +370,8 @@ class TestFileLevelAwareness:
         assert img_findings[0].severity == "blocker"
 
 
-    def test_test_file_sibling_does_not_downgrade(self, tmp_path):
-        """RELATED_IMAGE in a _test.go sibling should NOT downgrade to info."""
+    def test_test_file_sibling_covers_image(self, tmp_path):
+        """RELATED_IMAGE in a _test.go sibling covers the image (info)."""
         pkg = tmp_path / "pkg"
         pkg.mkdir()
         (pkg / "envvars_test.go").write_text('os.Getenv("RELATED_IMAGE_FOO")')
@@ -398,7 +380,7 @@ class TestFileLevelAwareness:
         img_findings = [f for f in result.findings
                         if f.image == "quay.io/org/img:v1"]
         assert len(img_findings) == 1
-        assert img_findings[0].severity == "blocker"
+        assert img_findings[0].severity == "info"
 
     def test_unreadable_sibling_produces_info(self, tmp_path):
         """Binary/unreadable sibling .go file produces an info finding."""
@@ -451,7 +433,7 @@ class TestCheckEnvVarPattern:
         assert any("no RELATED_IMAGE_*" in f.message for f in blockers)
         assert result.passed is False
 
-    def test_unmapped_image_in_excluded_is_info(self, tmp_path):
+    def test_unmapped_image_in_test_dir_is_blocker(self, tmp_path):
         pkg = tmp_path / "pkg"
         pkg.mkdir()
         (pkg / "images.go").write_text('"RELATED_IMAGE_FOO"')
@@ -460,7 +442,7 @@ class TestCheckEnvVarPattern:
         (test_dir / "helper.yaml").write_text("image: quay.io/org/unmapped:v1")
         result = check_env_var_pattern(tmp_path)
         test_findings = [f for f in result.findings if f.file.startswith("test/")]
-        assert all(f.severity == "info" for f in test_findings)
+        assert all(f.severity == "blocker" for f in test_findings)
 
     def test_var_not_in_manifest_is_blocker(self, tmp_path):
         pkg = tmp_path / "pkg"
@@ -475,7 +457,7 @@ class TestCheckEnvVarPattern:
         assert len(blockers) >= 1
         assert result.passed is False
 
-    def test_var_not_in_manifest_excluded_is_info(self, tmp_path):
+    def test_var_not_in_manifest_in_test_dir_is_blocker(self, tmp_path):
         test_dir = tmp_path / "test"
         test_dir.mkdir()
         (test_dir / "helper.go").write_text(
@@ -485,8 +467,8 @@ class TestCheckEnvVarPattern:
             tmp_path, manifest_env_vars={"RELATED_IMAGE_OTHER"}
         )
         test_findings = [f for f in result.findings if f.file.startswith("test/")]
-        assert all(f.severity == "info" for f in test_findings)
-        assert result.passed is True
+        assert all(f.severity == "blocker" for f in test_findings)
+        assert result.passed is False
 
     def test_stale_vars_blocker(self, tmp_path):
         pkg = tmp_path / "pkg"
@@ -541,7 +523,7 @@ class TestCheckStaticCsvPattern:
         blockers = [f for f in result.findings if f.severity == "blocker"]
         assert len(blockers) >= 1
 
-    def test_excluded_missing_image_is_info(self, tmp_path):
+    def test_missing_image_in_test_dir_is_blocker(self, tmp_path):
         f = tmp_path / "csv.yaml"
         f.write_text(
             "spec:\n"
@@ -553,9 +535,9 @@ class TestCheckStaticCsvPattern:
         test_dir.mkdir()
         (test_dir / "helper.yaml").write_text("image: quay.io/org/missing:v1")
         result = check_static_csv_pattern(tmp_path)
-        assert result.passed is True
+        assert result.passed is False
         test_findings = [f for f in result.findings if f.file.startswith("test/")]
-        assert all(f.severity == "info" for f in test_findings)
+        assert all(f.severity == "blocker" for f in test_findings)
 
     def test_all_images_covered(self, tmp_path):
         f = tmp_path / "csv.yaml"
@@ -607,3 +589,57 @@ class TestRun:
             manifest_env_vars={"RELATED_IMAGE_IMG_0", "RELATED_IMAGE_IMG_1"},
         )
         assert any("validated against" in f.message for f in result.findings)
+
+
+class TestParamsEnvDirsSkipped:
+    """YAML files in params-env-managed dirs are skipped (covered by params-env-wiring)."""
+
+    def _make_params_env_layout(self, tmp_path):
+        overlay = tmp_path / "config" / "overlays" / "odh"
+        overlay.mkdir(parents=True)
+        base = tmp_path / "config" / "base"
+        base.mkdir(parents=True)
+        (overlay / "params.env").write_text("RELATED_IMAGE_FOO=quay.io/org/foo:v1\n")
+        (overlay / "kustomization.yaml").write_text(
+            "resources:\n"
+            "- ../../base\n"
+        )
+        (base / "kustomization.yaml").write_text("resources:\n- manager.yaml\n")
+        (base / "manager.yaml").write_text("image: quay.io/org/hardcoded:v1\n")
+        return overlay, base
+
+    def test_scan_skips_params_env_managed_yaml(self, tmp_path):
+        self._make_params_env_layout(tmp_path)
+        outside = tmp_path / "src"
+        outside.mkdir()
+        (outside / "deploy.yaml").write_text("image: quay.io/org/outside:v1\n")
+
+        from rules.common import find_params_env_dirs
+        pe_dirs = find_params_env_dirs(tmp_path)
+        refs = scan_for_image_refs(tmp_path, params_env_dirs=pe_dirs)
+        images = [img for _, _, img in refs]
+        assert "quay.io/org/hardcoded:v1" not in images
+        assert "quay.io/org/outside:v1" in images
+
+    def test_check_env_var_skips_params_env_yaml(self, tmp_path):
+        self._make_params_env_layout(tmp_path)
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "images.go").write_text(
+            '"RELATED_IMAGE_A"\n' * 6
+        )
+        result = check_env_var_pattern(tmp_path)
+        managed_findings = [f for f in result.findings if "hardcoded" in f.image]
+        assert len(managed_findings) == 0
+
+    def test_check_unmanaged_skips_params_env_yaml(self, tmp_path):
+        self._make_params_env_layout(tmp_path)
+        outside = tmp_path / "src"
+        outside.mkdir()
+        (outside / "deploy.yaml").write_text("image: quay.io/org/outside:v1\n")
+        result = check_unmanaged_images(
+            tmp_path, manifest_env_vars={"RELATED_IMAGE_FOO"},
+        )
+        images = [f.image for f in result.findings if f.image]
+        assert "quay.io/org/hardcoded:v1" not in images
+        assert "quay.io/org/outside:v1" in images

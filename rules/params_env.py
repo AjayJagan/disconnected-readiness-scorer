@@ -8,19 +8,21 @@ Optionally cross-references against the operator manifest.
 
 from __future__ import annotations
 
+import shutil
 import tempfile
 from pathlib import Path
 
 try:
-    from rules.common import Finding, RuleResult
+    from rules.common import Finding, RuleResult, SKIP_DIRS
 except ModuleNotFoundError:
-    from common import Finding, RuleResult
+    from common import Finding, RuleResult, SKIP_DIRS
 
 try:
     from rules.params_env_utils import (
         kustomize_available, kustomize_build, discover_overlays,
         find_params_env_files, parse_params_env, load_ignore_file,
         create_probe_overlay, extract_all_images,
+        write_probe_params_env,
         extract_configmap_key_refs, extract_kustomize_replacement_keys,
         extract_env_configmap_mappings, find_go_related_image_envs,
         PROBE_SENTINEL,
@@ -30,12 +32,22 @@ except ModuleNotFoundError:
         kustomize_available, kustomize_build, discover_overlays,
         find_params_env_files, parse_params_env, load_ignore_file,
         create_probe_overlay, extract_all_images,
+        write_probe_params_env,
         extract_configmap_key_refs, extract_kustomize_replacement_keys,
         extract_env_configmap_mappings, find_go_related_image_envs,
         PROBE_SENTINEL,
     )
 
 RULE_NAME = "params-env-wiring"
+
+_IMAGE_KEY_INDICATORS = ("image", "img", "registry", "repository")
+
+
+def _looks_like_image_key(key: str) -> bool:
+    lower = key.lower().replace("-", "_")
+    return any(ind in lower for ind in _IMAGE_KEY_INDICATORS)
+
+
 OPERATOR_CONFIG_FILE = "component-params-env.yaml"
 
 
@@ -43,39 +55,180 @@ def _is_operator_repo(root: Path) -> bool:
     return (root / OPERATOR_CONFIG_FILE).is_file()
 
 
-def run(repo_root: str, manifest_env_vars: set[str] | None = None) -> RuleResult:
-    root = Path(repo_root)
-    result = RuleResult(rule=RULE_NAME)
+def _build_ignored_image_patterns(
+    ignored_keys: set[str], overlay_params: dict[str, str],
+) -> list[str]:
+    patterns: list[str] = []
+    for k in ignored_keys:
+        if k in overlay_params:
+            repo_part = overlay_params[k].split("@")[0].rsplit(":", 1)[0]
+            patterns.append(f"{repo_part}:*")
+            patterns.append(f"{repo_part}@*")
+    return patterns
 
-    if _is_operator_repo(root):
+
+def _check_wiring(
+    kdir: Path,
+    root: Path,
+    rendered: str,
+    dir_params: dict[str, str],
+    ignored_keys: set[str],
+    result: RuleResult,
+    all_manifest_related_vars: set[str],
+):
+    dir_active_keys = {k for k in dir_params if k not in ignored_keys}
+
+    ref_keys = extract_configmap_key_refs(rendered)
+    replacement_keys = extract_kustomize_replacement_keys(kdir)
+    wired_keys = ref_keys | replacement_keys
+
+    for key in sorted(dir_active_keys - wired_keys):
         result.findings.append(Finding(
-            severity="info", file="", line=0, image="",
-            message="Operator repo detected. params-env-wiring checks are not applicable — "
-                    "use validate-related-images.sh for operator-level validation.",
+            severity="info",
+            file=str(kdir.relative_to(root) / "params.env"),
+            line=0, image="",
+            message=f"params.env key '{key}' is not consumed by kustomize "
+                    f"(no configMapKeyRef or replacement). Unused key — "
+                    f"image not referenced in rendered manifests.",
         ))
-        return result
 
-    overlays = discover_overlays(root)
-    if not overlays:
-        return result
+    for key in sorted(ref_keys):
+        if key not in dir_params and _looks_like_image_key(key):
+            result.findings.append(Finding(
+                severity="info",
+                file=str(kdir.relative_to(root)),
+                line=0, image="",
+                message=f"configMapKeyRef references '{key}' which is not a "
+                        f"params.env image key.",
+            ))
 
-    if not kustomize_available():
+    env_mappings = extract_env_configmap_mappings(rendered)
+    for env_name, cm_key, _ in env_mappings:
+        if env_name.startswith("RELATED_IMAGE_") and cm_key in dir_active_keys:
+            all_manifest_related_vars.add(env_name)
+
+
+def _process_manifest_source_folder(
+    source_dir: Path,
+    root: Path,
+    ignored_keys: set[str],
+    result: RuleResult,
+    all_repo_params: dict[str, str],
+    all_manifest_related_vars: set[str],
+    env_mappings_set: set[str],
+) -> int:
+    """Process all kustomization dirs under a manifest_source folder.
+
+    Returns the number of overlays with params.env found.
+    """
+    all_params_env = sorted(source_dir.rglob("params.env"))
+    kustomization_files = sorted(source_dir.rglob("kustomization.yaml"))
+
+    if not kustomization_files:
+        return 0
+
+    overlay_params: dict[str, str] = {}
+    for params_path in all_params_env:
+        overlay_params.update(parse_params_env(params_path))
+    all_repo_params.update(overlay_params)
+
+    ignored_image_patterns = _build_ignored_image_patterns(ignored_keys, overlay_params)
+    has_params = len(all_params_env) > 0
+
+    # --- Probe: copy source dir, replace all params.env with sentinels ---
+    try:
+        with tempfile.TemporaryDirectory(prefix="verify-params-env-") as tmp:
+            tmp_source = Path(tmp) / source_dir.name
+            shutil.copytree(str(source_dir), str(tmp_source))
+
+            if has_params:
+                for params_path in all_params_env:
+                    rel = params_path.relative_to(source_dir)
+                    write_probe_params_env(params_path, tmp_source / rel, ignored_keys)
+
+            for kustomization in sorted(tmp_source.rglob("kustomization.yaml")):
+                kdir = kustomization.parent
+                if any(d in kustomization.parts for d in SKIP_DIRS):
+                    continue
+                try:
+                    probe_rendered = kustomize_build(kdir)
+                except RuntimeError:
+                    continue
+
+                orig_kdir = source_dir / kdir.relative_to(tmp_source)
+                images = extract_all_images(
+                    probe_rendered,
+                    ignored_image_patterns if has_params else [],
+                )
+                for img, locations in images.items():
+                    if img == PROBE_SENTINEL:
+                        continue
+                    result.passed = False
+                    loc_str = ", ".join(locations) if locations else "unknown"
+                    result.findings.append(Finding(
+                        severity="blocker",
+                        file=str(orig_kdir.relative_to(root)),
+                        line=0, image=img,
+                        message=f"Hardcoded image '{img}' in operator-managed kustomize "
+                                f"dir without params.env wiring (found in {loc_str}). "
+                                f"Will not be mirrored in disconnected.",
+                    ))
+    except RuntimeError as e:
         result.findings.append(Finding(
-            severity="info", file="", line=0, image="",
-            message="kustomize not found on PATH. Skipping params.env wiring checks. "
-                    "Install kustomize for full validation.",
-        ))
-        return result
-    ignored_keys = load_ignore_file(root)
-
-    if ignored_keys:
-        result.findings.append(Finding(
-            severity="info", file="", line=0, image="",
-            message=f"{len(ignored_keys)} params.env key(s) excluded via "
-                    f".verify-params-env-ignore: {', '.join(sorted(ignored_keys))}",
+            severity="info",
+            file=str(source_dir.relative_to(root)),
+            line=0, image="",
+            message=f"kustomize build failed for manifest source: {e}",
         ))
 
-    all_repo_params: dict[str, str] = {}
+    if not has_params:
+        return 0
+
+    # --- Wiring check + RELATED_IMAGE collection (on original dirs) ---
+    overlays_with_params = 0
+    for kustomization in kustomization_files:
+        kdir = kustomization.parent
+        if any(d in kustomization.parts for d in SKIP_DIRS):
+            continue
+
+        dir_params_files = find_params_env_files(kdir)
+        dir_params: dict[str, str] = {}
+        for p in dir_params_files:
+            dir_params.update(parse_params_env(p))
+        if not dir_params:
+            continue
+
+        overlays_with_params += 1
+
+        try:
+            original_rendered = kustomize_build(kdir)
+        except RuntimeError:
+            continue
+
+        _check_wiring(
+            kdir, root, original_rendered, dir_params,
+            ignored_keys, result, all_manifest_related_vars,
+        )
+
+        # Collect env mappings for operator manifest cross-ref
+        dir_active_keys = {k for k in dir_params if k not in ignored_keys}
+        for env_name, cm_key, _ in extract_env_configmap_mappings(original_rendered):
+            if cm_key in dir_active_keys:
+                env_mappings_set.add(env_name)
+
+    return overlays_with_params
+
+
+def _process_discover_overlays(
+    overlays: list[Path],
+    root: Path,
+    ignored_keys: set[str],
+    result: RuleResult,
+    all_repo_params: dict[str, str],
+    all_manifest_related_vars: set[str],
+    env_mappings_set: set[str],
+) -> int:
+    """Fallback: process overlays found by discover_overlays() (no manifest_source)."""
     total_overlays = 0
 
     for overlay_dir in overlays:
@@ -93,16 +246,8 @@ def run(repo_root: str, manifest_env_vars: set[str] | None = None) -> RuleResult
         total_overlays += 1
         all_repo_params.update(overlay_params)
         active_keys = {k for k in overlay_params if k not in ignored_keys}
+        ignored_image_patterns = _build_ignored_image_patterns(ignored_keys, overlay_params)
 
-        # --- Build ignored image patterns for probe ---
-        ignored_image_patterns = []
-        for k in ignored_keys:
-            if k in overlay_params:
-                repo_part = overlay_params[k].split("@")[0].rsplit(":", 1)[0]
-                ignored_image_patterns.append(f"{repo_part}:*")
-                ignored_image_patterns.append(f"{repo_part}@*")
-
-        # --- Probe check ---
         try:
             with tempfile.TemporaryDirectory(prefix="verify-params-env-") as tmp:
                 tmp_overlay = create_probe_overlay(
@@ -135,7 +280,6 @@ def run(repo_root: str, manifest_env_vars: set[str] | None = None) -> RuleResult
                         f"(found in {loc_str}). Will not be mirrored in disconnected.",
             ))
 
-        # --- Wiring check ---
         try:
             original_rendered = kustomize_build(overlay_dir)
         except RuntimeError as e:
@@ -148,70 +292,103 @@ def run(repo_root: str, manifest_env_vars: set[str] | None = None) -> RuleResult
             ))
             original_rendered = probe_rendered
 
-        ref_keys = extract_configmap_key_refs(original_rendered)
-        replacement_keys = extract_kustomize_replacement_keys(overlay_dir)
-        wired_keys = ref_keys | replacement_keys
+        _check_wiring(
+            overlay_dir, root, original_rendered, overlay_params,
+            ignored_keys, result, all_manifest_related_vars,
+        )
 
-        for key in sorted(active_keys - wired_keys):
-            result.passed = False
-            result.findings.append(Finding(
-                severity="blocker",
-                file=str(overlay_dir.relative_to(root) / "params.env"),
-                line=0, image="",
-                message=f"params.env key '{key}' is not consumed by kustomize "
-                        f"(no configMapKeyRef or replacement). Image will not be injected "
-                        f"in disconnected environments.",
-            ))
+        # Collect env mappings for operator manifest cross-ref
+        for env_name, cm_key, _ in extract_env_configmap_mappings(original_rendered):
+            if cm_key in active_keys:
+                env_mappings_set.add(env_name)
 
-        for key in sorted(ref_keys):
-            if key not in overlay_params:
-                result.findings.append(Finding(
-                    severity="info",
-                    file=str(overlay_dir.relative_to(root)),
-                    line=0, image="",
-                    message=f"configMapKeyRef references '{key}' which is not a "
-                            f"params.env image key.",
-                ))
+    return total_overlays
 
-        # --- Go wiring check ---
-        env_mappings = extract_env_configmap_mappings(original_rendered)
-        manifest_related_vars = {
-            env_name for env_name, cm_key, _ in env_mappings
-            if env_name.startswith("RELATED_IMAGE_") and cm_key in active_keys
-        }
-        go_env_vars = find_go_related_image_envs(root)
 
-        for var in sorted(manifest_related_vars - go_env_vars):
-            result.findings.append(Finding(
-                severity="info",
-                file="", line=0, image="",
-                message=f"RELATED_IMAGE var '{var}' is in rendered manifests but Go code "
-                        f"never calls os.Getenv for it. Controller may ignore this image.",
-            ))
+def run(repo_root: str, manifest_env_vars: set[str] | None = None,
+        production_scope=None, **_kwargs) -> RuleResult:
+    root = Path(repo_root)
+    result = RuleResult(rule=RULE_NAME)
 
-        for var in sorted(go_env_vars - manifest_related_vars):
-            result.passed = False
-            result.findings.append(Finding(
-                severity="blocker",
-                file="", line=0, image="",
-                message=f"Go code calls os.Getenv(\"{var}\") but this var is not in "
-                        f"rendered manifests. Controller expects an image that won't "
-                        f"be injected in disconnected environments.",
-            ))
+    if _is_operator_repo(root):
+        result.findings.append(Finding(
+            severity="info", file="", line=0, image="",
+            message="Operator repo detected. params-env-wiring checks are not applicable — "
+                    "use validate-related-images.sh for operator-level validation.",
+        ))
+        return result
+
+    manifest_source = (
+        production_scope.manifest_source
+        if production_scope and production_scope.manifest_source
+        else None
+    )
+
+    overlays = discover_overlays(root)
+    if not overlays and not manifest_source:
+        return result
+
+    if not kustomize_available():
+        result.findings.append(Finding(
+            severity="info", file="", line=0, image="",
+            message="kustomize not found on PATH. Skipping params.env wiring checks. "
+                    "Install kustomize for full validation.",
+        ))
+        return result
+
+    ignored_keys = load_ignore_file(root)
+    if ignored_keys:
+        result.findings.append(Finding(
+            severity="info", file="", line=0, image="",
+            message=f"{len(ignored_keys)} params.env key(s) excluded via "
+                    f".verify-params-env-ignore: {', '.join(sorted(ignored_keys))}",
+        ))
+
+    all_repo_params: dict[str, str] = {}
+    all_manifest_related_vars: set[str] = set()
+    env_mappings_set: set[str] = set()
+    total_overlays = 0
+
+    if manifest_source:
+        for folder in manifest_source.split(","):
+            source_dir = root / folder
+            if not source_dir.is_dir():
+                continue
+            total_overlays += _process_manifest_source_folder(
+                source_dir, root, ignored_keys, result,
+                all_repo_params, all_manifest_related_vars,
+                env_mappings_set,
+            )
+    else:
+        total_overlays = _process_discover_overlays(
+            overlays, root, ignored_keys, result,
+            all_repo_params, all_manifest_related_vars,
+            env_mappings_set,
+        )
+
+    # --- Go wiring check (repo-global) ---
+    go_env_vars = find_go_related_image_envs(root)
+
+    for var in sorted(all_manifest_related_vars - go_env_vars):
+        result.findings.append(Finding(
+            severity="info",
+            file="", line=0, image="",
+            message=f"RELATED_IMAGE var '{var}' is in rendered manifests but Go code "
+                    f"never calls os.Getenv for it. Controller may ignore this image.",
+        ))
+
+    for var in sorted(go_env_vars - all_manifest_related_vars):
+        result.passed = False
+        result.findings.append(Finding(
+            severity="blocker",
+            file="", line=0, image="",
+            message=f"Go code calls os.Getenv(\"{var}\") but this var is not in "
+                    f"rendered manifests. Controller expects an image that won't "
+                    f"be injected in disconnected environments.",
+        ))
 
     # --- Operator manifest cross-reference ---
     if manifest_env_vars is not None:
-        active_params = {k for k in all_repo_params if k not in ignored_keys}
-        env_mappings_set: set[str] = set()
-        for overlay_dir in overlays:
-            try:
-                rendered = kustomize_build(overlay_dir)
-                for env_name, cm_key, _ in extract_env_configmap_mappings(rendered):
-                    if cm_key in active_params:
-                        env_mappings_set.add(env_name)
-            except RuntimeError:
-                continue
-
         for env_name in sorted(env_mappings_set):
             if env_name.startswith("RELATED_IMAGE_") and env_name not in manifest_env_vars:
                 result.passed = False
