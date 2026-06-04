@@ -9,7 +9,7 @@ If the repo uses RELATED_IMAGE_* env vars (the opendatahub-operator pattern), th
 checks that every image reference maps to a RELATED_IMAGE_* variable. If the repo uses
 a static CSV, it checks that every image appears in relatedImages.
 
-Test files, CI config, and semgrep rules are excluded from blocker findings.
+Exclusions (test files, CI, etc.) are handled by the exception system in config/exceptions.yaml.
 """
 
 from __future__ import annotations
@@ -18,9 +18,17 @@ import re
 from pathlib import Path
 
 try:
-    from rules.common import Finding, RuleResult, get_tracked_files
+    from rules.common import (
+        Finding, RuleResult, get_tracked_files, is_in_production_scope,
+        is_yaml_in_production_scope, SKIP_DIRS,
+        find_params_env_dirs,
+    )
 except ModuleNotFoundError:
-    from common import Finding, RuleResult, get_tracked_files
+    from common import (
+        Finding, RuleResult, get_tracked_files, is_in_production_scope,
+        is_yaml_in_production_scope, SKIP_DIRS,
+        find_params_env_dirs,
+    )
 
 IMAGE_REF_PATTERN = re.compile(
     r'(?:'
@@ -53,22 +61,6 @@ NON_REGISTRY_DOMAINS = {
     "openshift.io",
 }
 
-TEST_DIRS = {"test", "tests", "testdata", "e2e", "hack"}
-TEST_SUFFIXES = {"_test.go", "_int_test.go", "_internal_test.go"}
-CI_DIRS = {".github", ".tekton", "ci"}
-SKIP_DIRS = {".git", "vendor", "node_modules", "__pycache__", ".tox"}
-SKIP_FILES = {"semgrep.yaml", "semgrep.yml", ".semgrep.yml"}
-
-
-def is_excluded_file(filepath: Path) -> bool:
-    """Check if a file should be excluded from blocker findings."""
-    if filepath.name in SKIP_FILES:
-        return True
-    if any(filepath.name.endswith(s) for s in TEST_SUFFIXES):
-        return True
-    if any(d in filepath.parts for d in TEST_DIRS | CI_DIRS):
-        return True
-    return False
 
 
 def detect_image_pattern(repo_root: Path) -> str:
@@ -98,22 +90,35 @@ def detect_image_pattern(repo_root: Path) -> str:
     return "unknown"
 
 
-def extract_related_image_vars(repo_root: Path) -> set[str]:
-    """Extract all RELATED_IMAGE_* env var names defined in Go source."""
-    env_vars = set()
+def extract_related_image_vars(
+    repo_root: Path,
+    with_locations: bool = False,
+) -> set[str] | dict[str, tuple[str, int]]:
+    """Extract all RELATED_IMAGE_* env var names defined in Go source.
+
+    When *with_locations* is True, returns a dict mapping var name to
+    (relative_file, line_number) of its first occurrence.
+    """
+    env_vars: set[str] = set()
+    var_locations: dict[str, tuple[str, int]] = {}
     for go_file in repo_root.rglob("*.go"):
         if any(d in go_file.parts for d in SKIP_DIRS):
             continue
-        if is_excluded_file(go_file):
-            continue
         try:
-            content = go_file.read_text()
-            for match in RELATED_IMAGE_PATTERN.finditer(content):
-                var = match.group()
-                if var != "RELATED_IMAGE_*":
-                    env_vars.add(var)
+            lines = go_file.read_text().splitlines()
+            for i, line in enumerate(lines, 1):
+                for match in RELATED_IMAGE_PATTERN.finditer(line):
+                    var = match.group()
+                    if var != "RELATED_IMAGE_*":
+                        env_vars.add(var)
+                        if with_locations and var not in var_locations:
+                            var_locations[var] = (
+                                str(go_file.relative_to(repo_root)), i,
+                            )
         except (OSError, UnicodeDecodeError):
             continue
+    if with_locations:
+        return var_locations
     return env_vars
 
 
@@ -137,11 +142,10 @@ def _build_file_related_image_map(
                 vars_in_file.add(var)
         if vars_in_file:
             file_vars[filepath] = vars_in_file
-            if not is_excluded_file(filepath):
-                parent = filepath.parent
-                if parent not in dir_vars:
-                    dir_vars[parent] = set()
-                dir_vars[parent] |= vars_in_file
+            parent = filepath.parent
+            if parent not in dir_vars:
+                dir_vars[parent] = set()
+            dir_vars[parent] |= vars_in_file
     return file_vars, dir_vars
 
 
@@ -183,7 +187,11 @@ def normalize_image(ref: str) -> str:
     return ref
 
 
-def scan_for_image_refs(repo_root: Path, tracked: set[Path] | None = None) -> list[tuple[Path, int, str]]:
+def scan_for_image_refs(
+    repo_root: Path,
+    tracked: set[Path] | None = None,
+    params_env_dirs: set[Path] | None = None,
+) -> list[tuple[Path, int, str]]:
     """Scan source files for container image references."""
     extensions = {".go", ".py", ".yaml", ".yml", ".json", ".sh"}
     results = []
@@ -192,6 +200,8 @@ def scan_for_image_refs(repo_root: Path, tracked: set[Path] | None = None) -> li
         if tracked is not None and filepath.resolve() not in tracked:
             continue
         if any(d in filepath.parts for d in SKIP_DIRS):
+            continue
+        if params_env_dirs and any(filepath.resolve().is_relative_to(d) for d in params_env_dirs):
             continue
         if filepath.suffix not in extensions and filepath.name != "Dockerfile":
             continue
@@ -202,16 +212,21 @@ def scan_for_image_refs(repo_root: Path, tracked: set[Path] | None = None) -> li
             continue
 
         for i, line in enumerate(lines, 1):
+            stripped = line.strip()
+            if stripped.startswith("//") or stripped.startswith("#"):
+                continue
             seen: set[str] = set()
             for pattern in (IMAGE_REF_PATTERN, GO_IMAGE_ASSIGN_PATTERN):
                 for match in pattern.finditer(line):
                     img = match.group(1).strip().strip('"').strip("'")
                     domain = img.split("/")[0].split(":")[0]
+                    parts = img.split("/")
                     if (
                         "/" in img
                         and not img.startswith("#")
                         and domain not in NON_REGISTRY_DOMAINS
                         and img not in seen
+                        and all(len(p.split(":")[0]) > 1 for p in parts)
                     ):
                         seen.add(img)
                         results.append((filepath, i, img))
@@ -223,6 +238,7 @@ def check_env_var_pattern(
     repo_root: Path,
     manifest_env_vars: set[str] | None = None,
     tracked: set[Path] | None = None,
+    production_scope=None,
 ) -> RuleResult:
     """Check repos that use RELATED_IMAGE_* env var pattern.
 
@@ -230,7 +246,8 @@ def check_env_var_pattern(
     the target repo's env vars against the authoritative operator manifest.
     """
     result = RuleResult(rule="image-manifest-complete")
-    local_vars = extract_related_image_vars(repo_root)
+    var_locations = extract_related_image_vars(repo_root, with_locations=True)
+    local_vars = set(var_locations.keys())
 
     if manifest_env_vars is not None:
         result.findings.append(Finding(
@@ -252,7 +269,8 @@ def check_env_var_pattern(
             message=f"Repo uses RELATED_IMAGE_* pattern. Found {len(local_vars)} env vars.",
         ))
 
-    image_refs = scan_for_image_refs(repo_root, tracked=tracked)
+    pe_dirs = find_params_env_dirs(repo_root)
+    image_refs = scan_for_image_refs(repo_root, tracked=tracked, params_env_dirs=pe_dirs)
     file_lines_cache: dict[Path, list[str]] = {}
 
     dirs_with_refs: set[Path] = set()
@@ -285,7 +303,9 @@ def check_env_var_pattern(
     )
 
     for filepath, line_num, image in image_refs:
-        excluded = is_excluded_file(filepath)
+        in_prod_go = is_in_production_scope(filepath, production_scope)
+        in_prod_yaml = is_yaml_in_production_scope(filepath, production_scope)
+        in_prod = False if (in_prod_go is False or in_prod_yaml is False) else None
 
         try:
             line_content = file_lines_cache[filepath][line_num - 1]
@@ -319,7 +339,12 @@ def check_env_var_pattern(
                             f"Likely covered by env var injection.",
                 ))
             else:
-                severity = "info" if excluded else "blocker"
+                severity = "blocker"
+                msg = (f"Image '{image}' has no RELATED_IMAGE_* mapping on this line. "
+                       f"Will not be mirrored in disconnected environments.")
+                if in_prod is False and severity == "blocker":
+                    severity = "info"
+                    msg += " [out of production scope]"
                 if severity == "blocker":
                     result.passed = False
                 result.findings.append(Finding(
@@ -327,14 +352,19 @@ def check_env_var_pattern(
                     file=relative,
                     line=line_num,
                     image=image,
-                    message=f"Image '{image}' has no RELATED_IMAGE_* mapping on this line. "
-                            f"Will not be mirrored in disconnected environments.",
+                    message=msg,
                 ))
         elif manifest_env_vars is not None:
             for var_name in related_vars:
                 if var_name not in manifest_env_vars:
                     relative = str(filepath.relative_to(repo_root))
-                    severity = "info" if excluded else "blocker"
+                    severity = "blocker"
+                    msg = (f"Image references '{var_name}' which does not exist "
+                           f"in the operator manifest. The operator will not inject "
+                           f"this image in disconnected environments.")
+                    if in_prod is False and severity in ("blocker", "warning"):
+                        severity = "info"
+                        msg += " [out of production scope]"
                     if severity == "blocker":
                         result.passed = False
                     result.findings.append(Finding(
@@ -342,19 +372,18 @@ def check_env_var_pattern(
                         file=relative,
                         line=line_num,
                         image=image,
-                        message=f"Image references '{var_name}' which does not exist "
-                                f"in the operator manifest. The operator will not inject "
-                                f"this image in disconnected environments.",
+                        message=msg,
                     ))
 
     if manifest_env_vars is not None:
         stale_vars = local_vars - manifest_env_vars
         for var in sorted(stale_vars):
+            var_file, var_line = var_locations.get(var, ("", 0))
             result.passed = False
             result.findings.append(Finding(
                 severity="blocker",
-                file="",
-                line=0,
+                file=var_file,
+                line=var_line,
                 image="",
                 message=f"Env var '{var}' found in repo but not in operator manifest. "
                         f"Operator will not inject this image in disconnected environments.",
@@ -374,7 +403,11 @@ def check_env_var_pattern(
     return result
 
 
-def check_static_csv_pattern(repo_root: Path, tracked: set[Path] | None = None) -> RuleResult:
+def check_static_csv_pattern(
+    repo_root: Path,
+    tracked: set[Path] | None = None,
+    production_scope=None,
+) -> RuleResult:
     """Check repos that use static CSV relatedImages."""
     result = RuleResult(rule="image-manifest-complete")
     related_images = extract_static_related_images(repo_root)
@@ -390,15 +423,22 @@ def check_static_csv_pattern(repo_root: Path, tracked: set[Path] | None = None) 
                     "No images can be verified for disconnected mirroring.",
         ))
 
-    image_refs = scan_for_image_refs(repo_root, tracked=tracked)
+    pe_dirs = find_params_env_dirs(repo_root)
+    image_refs = scan_for_image_refs(repo_root, tracked=tracked, params_env_dirs=pe_dirs)
 
     for filepath, line_num, image in image_refs:
         normalized = normalize_image(image)
-        excluded = is_excluded_file(filepath)
+        in_prod_go = is_in_production_scope(filepath, production_scope)
+        in_prod_yaml = is_yaml_in_production_scope(filepath, production_scope)
+        in_prod = False if (in_prod_go is False or in_prod_yaml is False) else None
 
         if normalized and normalized not in related_images:
             relative = str(filepath.relative_to(repo_root))
-            severity = "info" if excluded else "blocker"
+            severity = "blocker"
+            msg = f"Image '{image}' not found in CSV relatedImages."
+            if in_prod is False and severity in ("blocker", "warning"):
+                severity = "info"
+                msg += " [out of production scope]"
             if severity == "blocker":
                 result.passed = False
             result.findings.append(Finding(
@@ -406,13 +446,66 @@ def check_static_csv_pattern(repo_root: Path, tracked: set[Path] | None = None) 
                 file=relative,
                 line=line_num,
                 image=image,
-                message=f"Image '{image}' not found in CSV relatedImages.",
+                message=msg,
             ))
 
     return result
 
 
-def run(repo_root: str, manifest_env_vars: set[str] | None = None) -> RuleResult:
+def check_unmanaged_images(
+    repo_root: Path,
+    manifest_env_vars: set[str],
+    tracked: set[Path] | None = None,
+    production_scope=None,
+) -> RuleResult:
+    """Check repos with no RELATED_IMAGE pattern but known to be operator-managed.
+
+    Scans for hardcoded image references that have no RELATED_IMAGE_* wiring.
+    These images will not be injected by the operator in disconnected environments.
+    """
+    result = RuleResult(rule="image-manifest-complete")
+    result.findings.append(Finding(
+        severity="info",
+        file="",
+        line=0,
+        image="",
+        message=f"No RELATED_IMAGE_* pattern detected, but repo is operator-managed. "
+                f"Scanning for hardcoded images not covered by operator manifest "
+                f"({len(manifest_env_vars)} authoritative vars).",
+    ))
+
+    pe_dirs = find_params_env_dirs(repo_root)
+    image_refs = scan_for_image_refs(repo_root, tracked=tracked, params_env_dirs=pe_dirs)
+
+    for filepath, line_num, image in image_refs:
+        in_prod_go = is_in_production_scope(filepath, production_scope)
+        in_prod_yaml = is_yaml_in_production_scope(filepath, production_scope)
+        in_prod = False if (in_prod_go is False or in_prod_yaml is False) else None
+
+        relative = str(filepath.relative_to(repo_root))
+        severity = "blocker"
+        msg = (f"Hardcoded image '{image}' has no RELATED_IMAGE_* wiring. "
+               f"The operator will not inject a mirrored version in disconnected environments.")
+
+        if in_prod is False and severity in ("blocker", "warning"):
+            severity = "info"
+            msg += " [out of production scope]"
+
+        if severity == "blocker":
+            result.passed = False
+
+        result.findings.append(Finding(
+            severity=severity,
+            file=relative,
+            line=line_num,
+            image=image,
+            message=msg,
+        ))
+
+    return result
+
+
+def run(repo_root: str, manifest_env_vars: set[str] | None = None, production_scope=None) -> RuleResult:
     """Run the image manifest completeness rule.
 
     When manifest_env_vars is provided, the env_var pattern check will
@@ -423,9 +516,14 @@ def run(repo_root: str, manifest_env_vars: set[str] | None = None) -> RuleResult
     pattern = detect_image_pattern(root)
 
     if pattern == "env_var":
-        return check_env_var_pattern(root, manifest_env_vars=manifest_env_vars, tracked=tracked)
+        return check_env_var_pattern(root, manifest_env_vars=manifest_env_vars, tracked=tracked, production_scope=production_scope)
     elif pattern == "static_csv":
-        return check_static_csv_pattern(root, tracked=tracked)
+        return check_static_csv_pattern(root, tracked=tracked, production_scope=production_scope)
+    elif manifest_env_vars is not None:
+        return check_unmanaged_images(
+            root, manifest_env_vars=manifest_env_vars,
+            tracked=tracked, production_scope=production_scope,
+        )
     else:
         result = RuleResult(rule="image-manifest-complete")
         result.findings.append(Finding(

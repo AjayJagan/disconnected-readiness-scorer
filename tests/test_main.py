@@ -264,8 +264,9 @@ class TestRenderMarkdown:
 # --- main (integration-level) ---
 
 class TestMain:
+    @patch("main.compute_production_scope", return_value=None)
     @patch("main.importlib.import_module")
-    def test_all_pass_returns_0(self, mock_import):
+    def test_all_pass_returns_0(self, mock_import, _mock_scope):
         fake_mod = MagicMock()
         fake_mod.run.return_value = RuleResult(rule="test-rule", passed=True)
         fake_mod.detect_image_pattern.return_value = "static_csv"
@@ -274,8 +275,9 @@ class TestMain:
         exit_code = main([".", "--rules", "csv,tags,egress,python", "--report", "json"])
         assert exit_code == 0
 
+    @patch("main.compute_production_scope", return_value=None)
     @patch("main.importlib.import_module")
-    def test_blocker_returns_1(self, mock_import):
+    def test_blocker_returns_1(self, mock_import, _mock_scope):
         fake_mod = MagicMock()
         fake_mod.run.return_value = RuleResult(
             rule="test-rule", passed=False,
@@ -287,8 +289,9 @@ class TestMain:
         exit_code = main([".", "--rules", "csv", "--report", "json"])
         assert exit_code == 1
 
+    @patch("main.compute_production_scope", return_value=None)
     @patch("main.importlib.import_module")
-    def test_output_flag_writes_file(self, mock_import, tmp_path):
+    def test_output_flag_writes_file(self, mock_import, _mock_scope, tmp_path):
         fake_mod = MagicMock()
         fake_mod.run.return_value = RuleResult(rule="r", passed=True)
         fake_mod.detect_image_pattern.return_value = "static_csv"
@@ -301,7 +304,8 @@ class TestMain:
         data = json.loads(content.strip())
         assert data["score"] == "READY"
 
-    def test_manifest_rule_triggers_adapt(self):
+    @patch("main.compute_production_scope", return_value=None)
+    def test_manifest_rule_triggers_adapt(self, _mock_scope):
         fake_manifest = FakeManifest(images=[], components=[], known_issues=[])
 
         with patch("main.load_manifest", return_value=(fake_manifest, set())) as mock_load, \
@@ -313,7 +317,8 @@ class TestMain:
             mock_load.assert_called_once()
             mock_adapt.assert_called_once_with(fake_manifest)
 
-    def test_env_var_pattern_triggers_manifest_load(self):
+    @patch("main.compute_production_scope", return_value=None)
+    def test_env_var_pattern_triggers_manifest_load(self, _mock_scope):
         fake_mod = MagicMock()
         fake_mod.detect_image_pattern.return_value = "env_var"
         fake_mod.run.return_value = RuleResult(rule="csv", passed=True)
@@ -546,6 +551,24 @@ class TestApplyExceptions:
         assert results[0].passed is True
         assert results[1].findings[0].severity == "info"
         assert results[1].passed is True
+
+    def test_message_glob_matching(self):
+        results = [RuleResult(
+            rule="r", passed=False,
+            findings=[Finding("blocker", "f.go", 1, "", "http.Get with hardcoded external URL")],
+        )]
+        exceptions = [{"rule": "r", "message": "*hardcoded*", "reason": "ok"}]
+        apply_exceptions(results, exceptions, "repo")
+        assert results[0].findings[0].severity == "info"
+
+    def test_message_exact_no_glob_does_not_substring_match(self):
+        results = [RuleResult(
+            rule="r", passed=False,
+            findings=[Finding("blocker", "f.go", 1, "", "http.Get with hardcoded external URL")],
+        )]
+        exceptions = [{"rule": "r", "message": "http", "reason": "ok"}]
+        apply_exceptions(results, exceptions, "repo")
+        assert results[0].findings[0].severity == "blocker"
 
 
 # --- report sorting ---

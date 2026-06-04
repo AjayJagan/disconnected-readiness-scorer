@@ -6,9 +6,15 @@ from pathlib import Path
 from typing import List
 
 try:
-    from rules.common import Finding, RuleResult, get_tracked_files
+    from rules.common import (
+        Finding, RuleResult, get_tracked_files, is_in_production_scope,
+        is_yaml_in_production_scope, SKIP_DIRS, find_params_env_dirs,
+    )
 except ModuleNotFoundError:
-    from common import Finding, RuleResult, get_tracked_files
+    from common import (
+        Finding, RuleResult, get_tracked_files, is_in_production_scope,
+        is_yaml_in_production_scope, SKIP_DIRS, find_params_env_dirs,
+    )
 
 IMAGE_REF_PATTERN = re.compile(
     r'(https?://)?'
@@ -17,23 +23,13 @@ IMAGE_REF_PATTERN = re.compile(
 )
 
 SOURCE_EXTENSIONS = {".go", ".py", ".ts", ".tsx", ".sh"}
-EXCLUDED_DIRS = {"test", "tests", "e2e", "hack", "testdata", ".github", ".tekton", "ci"}
-TEST_SUFFIXES = {"_test.go", "_int_test.go", "_internal_test.go"}
-SKIP_FILES = {"semgrep.yaml", "semgrep.yml", ".semgrep.yml", "params.env"}
-BUILD_FILES = {"Dockerfile", "Containerfile"}
+
+_SKIP_FILENAMES = {"package-lock.json", "yarn.lock", "pnpm-lock.yaml"}
 
 
 def is_excluded_file(filepath: Path) -> bool:
     """Files that should produce info instead of blocker findings."""
-    if filepath.name in SKIP_FILES:
-        return True
-    if filepath.name in BUILD_FILES or filepath.name.endswith(".Dockerfile"):
-        return True
-    if any(filepath.name.endswith(s) for s in TEST_SUFFIXES):
-        return True
-    if any(d in filepath.parts for d in EXCLUDED_DIRS):
-        return True
-    return False
+    return filepath.name == "params.env"
 
 
 def is_source_code(filepath: Path) -> bool:
@@ -41,12 +37,28 @@ def is_source_code(filepath: Path) -> bool:
     return filepath.suffix in SOURCE_EXTENSIONS
 
 
-def scan_file(filepath: Path, root: Path) -> List[Finding]:
+_MAX_FILE_SIZE = 512 * 1024  # 512 KB
+
+
+def scan_file(filepath: Path, root: Path, production_scope=None) -> List[Finding]:
     findings = []
     try:
+        file_size = filepath.stat().st_size
+        if file_size > _MAX_FILE_SIZE:
+            findings.append(Finding(
+                severity="info",
+                file=str(filepath.relative_to(root)),
+                line=0,
+                image="",
+                message=f"Skipped large file ({file_size // 1024}KB > {_MAX_FILE_SIZE // 1024}KB limit).",
+            ))
+            return findings
         lines = filepath.read_text().splitlines()
     except (OSError, UnicodeDecodeError):
         return findings
+
+    in_prod_go = is_in_production_scope(filepath, production_scope)
+    in_prod_yaml = is_yaml_in_production_scope(filepath, production_scope)
 
     for i, line in enumerate(lines, 1):
         if line.strip().startswith("#") or line.strip().startswith("//"):
@@ -60,6 +72,8 @@ def scan_file(filepath: Path, root: Path) -> List[Finding]:
 
             if "/" not in repo_part:
                 continue
+            if any(len(p) <= 1 for p in repo_part.split("/")):
+                continue
             if ref_part.startswith("@sha256:"):
                 continue
 
@@ -68,13 +82,18 @@ def scan_file(filepath: Path, root: Path) -> List[Finding]:
                         f"Tags cannot be reliably mirrored.")
             if is_excluded_file(filepath):
                 severity = "info"
-                msg = f"{base_msg} File is excluded (test/build/CI)."
+                msg = f"{base_msg} File is excluded (params.env)."
             else:
                 severity = "blocker"
                 if is_source_code(filepath):
                     msg = f"{base_msg} Hardcoded in source code."
                 else:
                     msg = f"{base_msg} Manifest file not managed by params.env."
+
+            if severity in ("blocker", "warning"):
+                if in_prod_go is False or in_prod_yaml is False:
+                    severity = "info"
+                    msg += " [out of production scope]"
 
             findings.append(Finding(
                 severity=severity,
@@ -87,69 +106,29 @@ def scan_file(filepath: Path, root: Path) -> List[Finding]:
     return findings
 
 
-def _find_params_env_dirs(root: Path) -> set[Path]:
-    """Find directories managed by params.env + kustomize, including all referenced bases."""
-    dirs: set[Path] = set()
-    for params_env in root.rglob("params.env"):
-        overlay_dir = params_env.parent
-        if (overlay_dir / "kustomization.yaml").exists():
-            _collect_kustomize_tree(overlay_dir, dirs)
-    return dirs
-
-
-def _collect_kustomize_tree(overlay_dir: Path, dirs: set[Path]):
-    """Walk kustomization.yaml resources recursively to collect the full directory tree."""
-    resolved = overlay_dir.resolve()
-    if resolved in dirs:
-        return
-    dirs.add(resolved)
-
-    kustomization = overlay_dir / "kustomization.yaml"
-    if not kustomization.exists():
-        return
-
-    try:
-        content = kustomization.read_text()
-    except (OSError, UnicodeDecodeError):
-        return
-
-    in_resources = False
-    for line in content.splitlines():
-        stripped = line.strip()
-        if stripped == "resources:":
-            in_resources = True
-            continue
-        if in_resources:
-            if stripped.startswith("- "):
-                ref = stripped[2:].strip()
-                if ref.startswith("#"):
-                    continue
-                target = (overlay_dir / ref).resolve()
-                if target.is_dir():
-                    _collect_kustomize_tree(target, dirs)
-            elif stripped and not stripped.startswith("#"):
-                in_resources = False
-
-
-def run(repo_root: str) -> RuleResult:
+def run(repo_root: str, production_scope=None) -> RuleResult:
     root = Path(repo_root)
     result = RuleResult(rule="no-image-tags")
-    skip_dirs = {".git", "vendor", "node_modules", "__pycache__"}
+    skip_dirs = SKIP_DIRS
     extensions = {".go", ".py", ".yaml", ".yml", ".json", ".toml"}
-    params_env_dirs = _find_params_env_dirs(root)
+    params_env_dirs = find_params_env_dirs(root)
+    params_env_prefixes = tuple(str(d) + "/" for d in params_env_dirs)
     tracked = get_tracked_files(root)
 
     for filepath in root.rglob("*"):
-        if tracked is not None and filepath.resolve() not in tracked:
+        if filepath.name in _SKIP_FILENAMES:
+            continue
+        if filepath.suffix not in extensions:
             continue
         if any(d in filepath.parts for d in skip_dirs):
             continue
-        if params_env_dirs and any(filepath.resolve().is_relative_to(d) for d in params_env_dirs):
+        resolved = filepath.resolve()
+        if tracked is not None and resolved not in tracked:
             continue
-        if filepath.suffix not in extensions and filepath.name not in BUILD_FILES and not filepath.name.endswith(".Dockerfile"):
+        if params_env_prefixes and str(resolved).startswith(params_env_prefixes):
             continue
 
-        for finding in scan_file(filepath, root):
+        for finding in scan_file(filepath, root, production_scope=production_scope):
             result.findings.append(finding)
             if finding.severity == "blocker":
                 result.passed = False

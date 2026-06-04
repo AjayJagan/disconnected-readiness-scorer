@@ -47,6 +47,37 @@ class Manifest:
     rhai_helm_components: list = field(default_factory=list)
 
 
+_MANIFEST_ENTRY_RE = re.compile(
+    r'\["[^"]*"\]\s*=\s*"([^:]+):([^:]+):([^:]+):([^"]+)"'
+)
+
+
+def parse_component_manifest_mapping(operator_path: str) -> Dict[str, List[str]]:
+    """Parse get_all_manifests.sh to build repo-name → source-folders mapping.
+
+    Parses both ODH_COMPONENT_MANIFESTS and ODH_COMPONENT_CHARTS arrays.
+    Returns e.g. ``{'kserve': ['config'], 'odh-dashboard': ['manifests']}``.
+    """
+    script = Path(operator_path) / "get_all_manifests.sh"
+    if not script.is_file():
+        return {}
+
+    try:
+        content = script.read_text()
+    except (OSError, UnicodeDecodeError):
+        return {}
+
+    mapping: Dict[str, List[str]] = {}
+    for match in _MANIFEST_ENTRY_RE.finditer(content):
+        repo_name = match.group(2)
+        source_folder = match.group(4)
+        mapping.setdefault(repo_name, [])
+        if source_folder not in mapping[repo_name]:
+            mapping[repo_name].append(source_folder)
+
+    return mapping
+
+
 def clone_operator(target_dir: Path) -> Path:
     """Clone the operator repo if not already present."""
     if target_dir.exists() and (target_dir / ".git").exists():

@@ -5,6 +5,7 @@ from rules.params_env_utils import (
     extract_configmap_key_refs,
     extract_kustomize_replacement_keys,
     extract_env_configmap_mappings,
+    parse_params_env,
     PROBE_SENTINEL,
 )
 
@@ -61,6 +62,14 @@ class TestExtractConfigmapKeyRefs:
     def test_no_refs(self):
         assert extract_configmap_key_refs("kind: ConfigMap\n") == set()
 
+    def test_reversed_name_before_key(self):
+        rendered = (
+            "        configMapKeyRef:\n"
+            "          name: params\n"
+            "          key: my-component\n"
+        )
+        assert extract_configmap_key_refs(rendered) == {"my-component"}
+
 
 class TestExtractKustomizeReplacementKeys:
     def test_finds_field_path_keys(self, tmp_path):
@@ -96,3 +105,41 @@ class TestExtractEnvConfigmapMappings:
 
     def test_no_mappings(self):
         assert extract_env_configmap_mappings("kind: Service\n") == []
+
+    def test_reversed_name_before_key(self):
+        rendered = (
+            "    - name: RELATED_IMAGE_BAR\n"
+            "      valueFrom:\n"
+            "        configMapKeyRef:\n"
+            "          name: params\n"
+            "          key: bar-image-key\n"
+        )
+        result = extract_env_configmap_mappings(rendered)
+        assert len(result) == 1
+        assert result[0] == ("RELATED_IMAGE_BAR", "bar-image-key", "params")
+
+
+class TestParseParamsEnv:
+    def test_registryless_image_with_tag(self, tmp_path):
+        pf = tmp_path / "params.env"
+        pf.write_text("IMG=nginx:1.19\n")
+        result = parse_params_env(pf)
+        assert result == {"IMG": "nginx:1.19"}
+
+    def test_registryless_image_with_digest(self, tmp_path):
+        pf = tmp_path / "params.env"
+        pf.write_text("IMG=ubuntu@sha256:" + "a" * 64 + "\n")
+        result = parse_params_env(pf)
+        assert "IMG" in result
+
+    def test_plain_string_without_separator_skipped(self, tmp_path):
+        pf = tmp_path / "params.env"
+        pf.write_text("FOO=some-value\n")
+        result = parse_params_env(pf)
+        assert result == {}
+
+    def test_fully_qualified_image_still_works(self, tmp_path):
+        pf = tmp_path / "params.env"
+        pf.write_text("IMG=quay.io/org/img:v1\n")
+        result = parse_params_env(pf)
+        assert result == {"IMG": "quay.io/org/img:v1"}

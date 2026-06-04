@@ -2,42 +2,13 @@
 
 from pathlib import Path
 
+from rules.common import ProductionScope
 from rules.no_image_tags import is_excluded_file, is_source_code, scan_file, run
 
 
 class TestIsExcludedFile:
-    def test_semgrep_yaml(self):
-        assert is_excluded_file(Path("semgrep.yaml")) is True
-
     def test_params_env(self):
         assert is_excluded_file(Path("manifests/params.env")) is True
-
-    def test_test_suffix(self):
-        assert is_excluded_file(Path("pkg/foo_test.go")) is True
-
-    def test_int_test_suffix(self):
-        assert is_excluded_file(Path("pkg/foo_int_test.go")) is True
-
-    def test_test_dir(self):
-        assert is_excluded_file(Path("test/helper.go")) is True
-
-    def test_e2e_dir(self):
-        assert is_excluded_file(Path("e2e/suite.go")) is True
-
-    def test_ci_dir(self):
-        assert is_excluded_file(Path(".github/workflows/ci.yaml")) is True
-
-    def test_tekton_dir(self):
-        assert is_excluded_file(Path(".tekton/pipeline.yaml")) is True
-
-    def test_dockerfile(self):
-        assert is_excluded_file(Path("Dockerfile")) is True
-
-    def test_containerfile(self):
-        assert is_excluded_file(Path("build/Containerfile")) is True
-
-    def test_named_dockerfile(self):
-        assert is_excluded_file(Path("build/runtime.Dockerfile")) is True
 
     def test_regular_file(self):
         assert is_excluded_file(Path("pkg/server.go")) is False
@@ -85,23 +56,23 @@ class TestScanFile:
         assert len(findings) == 1
         assert findings[0].severity == "blocker"
 
-    def test_tag_ref_in_test_dir_is_info(self, tmp_path):
+    def test_tag_ref_in_test_dir_is_blocker(self, tmp_path):
         test_dir = tmp_path / "test"
         test_dir.mkdir()
         f = test_dir / "helper.go"
         f.write_text('image: quay.io/org/img:v1.0')
         findings = scan_file(f, tmp_path)
         assert len(findings) == 1
-        assert findings[0].severity == "info"
+        assert findings[0].severity == "blocker"
 
-    def test_tag_ref_in_test_go_file_is_info(self, tmp_path):
+    def test_tag_ref_in_test_go_file_is_blocker(self, tmp_path):
         pkg = tmp_path / "pkg"
         pkg.mkdir()
         f = pkg / "handler_test.go"
         f.write_text('image: quay.io/org/img:v1.0')
         findings = scan_file(f, tmp_path)
         assert len(findings) == 1
-        assert findings[0].severity == "info"
+        assert findings[0].severity == "blocker"
 
     def test_tag_ref_in_python_source_is_blocker(self, tmp_path):
         f = tmp_path / "app.py"
@@ -187,13 +158,11 @@ class TestRun:
         result = run(str(tmp_path))
         assert result.findings == []
 
-    def test_dockerfile_demoted_to_info(self, tmp_path):
+    def test_dockerfile_skipped(self, tmp_path):
         f = tmp_path / "Dockerfile"
         f.write_text('FROM quay.io/org/base:latest')
         result = run(str(tmp_path))
-        assert len(result.findings) == 1
-        assert result.findings[0].severity == "info"
-        assert result.passed is True
+        assert result.findings == []
 
     def test_manifest_tag_sets_passed_false(self, tmp_path):
         manifests = tmp_path / "manifests"
@@ -225,7 +194,42 @@ class TestRun:
         (test_dir / "helper.go").write_text('image: quay.io/org/img:v1')
 
         result = run(str(tmp_path))
+        assert result.passed is False
+        assert any(f.severity == "blocker" for f in result.findings)
+
+
+class TestProductionScope:
+    def test_out_of_scope_go_file_downgraded(self, tmp_path):
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        f = pkg / "images.go"
+        f.write_text('var img = "quay.io/org/app:v1.0"')
+        other = tmp_path / "main.go"
+        other.write_text("package main\n")
+        scope = ProductionScope(
+            production_files={other.resolve()}, method="go-import-graph",
+        )
+        result = run(str(tmp_path), production_scope=scope)
         assert result.passed is True
-        severities = {f.severity for f in result.findings}
-        assert "info" in severities
-        assert "blocker" not in severities
+        assert result.findings[0].severity == "info"
+        assert "[out of production scope]" in result.findings[0].message
+
+    def test_in_scope_go_file_stays_blocker(self, tmp_path):
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        f = pkg / "images.go"
+        f.write_text('var img = "quay.io/org/app:v1.0"')
+        scope = ProductionScope(
+            production_files={f.resolve()},
+            method="go-import-graph",
+        )
+        result = run(str(tmp_path), production_scope=scope)
+        assert result.passed is False
+        assert result.findings[0].severity == "blocker"
+
+    def test_non_go_file_unaffected(self, tmp_path):
+        f = tmp_path / "deploy.yaml"
+        f.write_text("image: quay.io/org/app:v1.0")
+        scope = ProductionScope(production_files=set(), method="go-import-graph")
+        result = run(str(tmp_path), production_scope=scope)
+        assert result.findings[0].severity == "blocker"

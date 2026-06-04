@@ -139,23 +139,23 @@ class TestCheckRuntimePipInstalls:
         findings = check_runtime_pip_installs(f, tmp_path)
         assert findings == []
 
-    def test_pip_install_in_test_dir_is_info(self, tmp_path):
+    def test_pip_install_in_test_dir_is_blocker(self, tmp_path):
         test_dir = tmp_path / "tests"
         test_dir.mkdir()
         f = test_dir / "conftest.py"
         f.write_text("subprocess.run('pip install test-pkg', shell=True)")
         findings = check_runtime_pip_installs(f, tmp_path)
         assert len(findings) == 1
-        assert findings[0].severity == "info"
+        assert findings[0].severity == "blocker"
 
-    def test_pip_install_in_e2e_dir_is_info(self, tmp_path):
+    def test_pip_install_in_e2e_dir_is_blocker(self, tmp_path):
         e2e = tmp_path / "e2e"
         e2e.mkdir()
         f = e2e / "setup.py"
         f.write_text("os.system('pip3 install torch')")
         findings = check_runtime_pip_installs(f, tmp_path)
         assert len(findings) == 1
-        assert findings[0].severity == "info"
+        assert findings[0].severity == "blocker"
 
 
 class TestRun:

@@ -19,7 +19,7 @@ from typing import Dict, List, Optional, Set, Tuple
 PROBE_SENTINEL = "probe.test/verify-params-env:check"
 IMAGE_PLACEHOLDERS = frozenset({"REPLACE_IMAGE"})
 IGNORE_FILE = ".verify-params-env-ignore"
-SKIP_DIRS = {".git", "vendor", "node_modules", "__pycache__", "test", "testdata", "e2e"}
+SKIP_DIRS = {".git", "vendor", "node_modules", "__pycache__"}
 
 _IMAGE_RE = re.compile(
     r"[a-zA-Z0-9._-]+/[a-zA-Z0-9._/-]+(?::[a-zA-Z0-9._-]+|@sha256:[a-f0-9]+)"
@@ -30,12 +30,26 @@ _CONFIGMAP_KEY_REF_RE = re.compile(
     r"\s+name:\s+(\S+)",
     re.MULTILINE,
 )
+_CONFIGMAP_KEY_REF_ALT_RE = re.compile(
+    r"configMapKeyRef:\s*\n"
+    r"\s+name:\s+\S+\s*\n"
+    r"\s+key:\s+(\S+)",
+    re.MULTILINE,
+)
 _ENV_NAME_BEFORE_CONFIGMAP_RE = re.compile(
     r"-\s+name:\s+(\S+)\s*\n"
     r"\s+valueFrom:\s*\n"
     r"\s+configMapKeyRef:\s*\n"
     r"\s+key:\s+(\S+)\s*\n"
     r"\s+name:\s+(\S+)",
+    re.MULTILINE,
+)
+_ENV_NAME_BEFORE_CONFIGMAP_ALT_RE = re.compile(
+    r"-\s+name:\s+(\S+)\s*\n"
+    r"\s+valueFrom:\s*\n"
+    r"\s+configMapKeyRef:\s*\n"
+    r"\s+name:\s+(\S+)\s*\n"
+    r"\s+key:\s+(\S+)",
     re.MULTILINE,
 )
 _KUSTOMIZE_REPLACEMENT_RE = re.compile(
@@ -73,11 +87,13 @@ def kustomize_build(overlay_dir: Path) -> str:
 
 
 def _looks_like_image(value: str) -> bool:
-    if "/" not in value:
-        return False
     if value.startswith("/") or value.startswith("./"):
         return False
-    return True
+    if "/" in value:
+        return True
+    if ":" in value or "@" in value:
+        return True
+    return False
 
 
 def parse_params_env(params_path: Path) -> Dict[str, str]:
@@ -271,7 +287,9 @@ def extract_all_images(rendered: str, exclude_patterns: List[str]) -> Dict[str, 
 
 
 def extract_configmap_key_refs(rendered: str) -> Set[str]:
-    return {m.group(1) for m in _CONFIGMAP_KEY_REF_RE.finditer(rendered)}
+    keys = {m.group(1) for m in _CONFIGMAP_KEY_REF_RE.finditer(rendered)}
+    keys |= {m.group(1) for m in _CONFIGMAP_KEY_REF_ALT_RE.finditer(rendered)}
+    return keys
 
 
 def extract_kustomize_replacement_keys(overlay_dir: Path) -> Set[str]:
@@ -311,10 +329,15 @@ def _collect_replacement_keys(overlay_dir: Path, keys: Set[str], visited: Set[Pa
 
 
 def extract_env_configmap_mappings(rendered: str) -> List[Tuple[str, str, str]]:
-    return [
+    results = [
         (m.group(1), m.group(2), m.group(3))
         for m in _ENV_NAME_BEFORE_CONFIGMAP_RE.finditer(rendered)
     ]
+    results += [
+        (m.group(1), m.group(3), m.group(2))
+        for m in _ENV_NAME_BEFORE_CONFIGMAP_ALT_RE.finditer(rendered)
+    ]
+    return results
 
 
 def find_go_related_image_envs(repo_root: Path) -> Set[str]:
@@ -323,8 +346,6 @@ def find_go_related_image_envs(repo_root: Path) -> Set[str]:
         return envs
     for go_file in repo_root.rglob("*.go"):
         if any(d in go_file.parts for d in SKIP_DIRS):
-            continue
-        if go_file.name.endswith("_test.go"):
             continue
         try:
             content = go_file.read_text()

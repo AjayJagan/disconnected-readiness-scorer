@@ -5,9 +5,15 @@ import re
 from pathlib import Path
 
 try:
-    from rules.common import Finding, RuleResult, get_tracked_files
+    from rules.common import (
+        Finding, RuleResult, get_tracked_files, is_in_production_scope,
+        SKIP_DIRS,
+    )
 except ModuleNotFoundError:
-    from common import Finding, RuleResult, get_tracked_files
+    from common import (
+        Finding, RuleResult, get_tracked_files, is_in_production_scope,
+        SKIP_DIRS,
+    )
 
 EGRESS_PATTERNS = {
     ".go": [
@@ -37,25 +43,13 @@ EGRESS_PATTERNS = {
     ],
 }
 
-BUILD_DIRS = {"Dockerfile", "Makefile", "Containerfile"}
-BUILD_PATHS = {".github", "ci", "hack", "build", "Dockerfile", "Makefile"}
-SKIP_DIRS = {".git", "vendor", "node_modules", "__pycache__"}
-TEST_DIRS = {"test", "tests", "testdata", "e2e"}
-TEST_SUFFIXES = {"_test.go", "_test.py", ".test.ts", ".test.tsx", ".spec.ts", ".spec.tsx"}
-
-
-def is_test_file(filepath: Path) -> bool:
-    name = filepath.name
-    if any(name.endswith(s) for s in TEST_SUFFIXES) or name.startswith("test_"):
-        return True
-    return any(d in filepath.parts for d in TEST_DIRS)
-
-
-def is_build_context(filepath: Path) -> bool:
-    return (
-        filepath.name in BUILD_DIRS
-        or any(d in filepath.parts for d in BUILD_PATHS)
-    )
+INTERNAL_URL_PATTERNS = [
+    "kubernetes.default.svc",
+    ".svc.cluster.local",
+    "localhost",
+    "127.0.0.1",
+    "0.0.0.0",
+]
 
 
 def has_configurable_url(line: str) -> bool:
@@ -65,7 +59,7 @@ def has_configurable_url(line: str) -> bool:
     return any(ind in line for ind in indicators)
 
 
-def run(repo_root: str) -> RuleResult:
+def run(repo_root: str, production_scope=None) -> RuleResult:
     root = Path(repo_root)
     result = RuleResult(rule="no-runtime-egress")
     tracked = get_tracked_files(root)
@@ -74,8 +68,6 @@ def run(repo_root: str) -> RuleResult:
         if tracked is not None and filepath.resolve() not in tracked:
             continue
         if any(d in filepath.parts for d in SKIP_DIRS):
-            continue
-        if is_build_context(filepath):
             continue
 
         suffix = filepath.suffix
@@ -87,6 +79,7 @@ def run(repo_root: str) -> RuleResult:
         except (OSError, UnicodeDecodeError):
             continue
 
+        in_prod = is_in_production_scope(filepath, production_scope)
         patterns = EGRESS_PATTERNS[suffix]
         for i, line in enumerate(lines, 1):
             stripped = line.strip()
@@ -100,20 +93,30 @@ def run(repo_root: str) -> RuleResult:
 
                 configurable = has_configurable_url(line)
                 hardcoded_url = bool(re.search(r'https?://', line))
-                in_test = is_test_file(filepath)
 
-                if in_test:
-                    severity = "info"
-                    msg = f"{desc} — test file, informational only."
-                elif hardcoded_url and not configurable:
+                internal_url = hardcoded_url and any(
+                    p in line for p in INTERNAL_URL_PATTERNS
+                )
+
+                if hardcoded_url and not configurable and not internal_url:
                     severity = "blocker"
                     msg = f"{desc} with hardcoded external URL — will fail disconnected."
+                elif internal_url:
+                    severity = "info"
+                    msg = f"{desc} — cluster-internal URL, reachable in disconnected environments."
                 elif configurable:
                     severity = "info"
                     msg = f"{desc} — URL appears configurable. Verify mirror support."
+                elif not hardcoded_url:
+                    severity = "info"
+                    msg = f"{desc} — no hardcoded URL, likely internal/relative API call."
                 else:
                     severity = "blocker"
                     msg = f"{desc} — endpoint may not be reachable in disconnected environments."
+
+                if in_prod is False and severity in ("blocker", "warning"):
+                    severity = "info"
+                    msg += " [out of production scope]"
 
                 if severity == "blocker":
                     result.passed = False

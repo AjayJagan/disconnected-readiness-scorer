@@ -10,7 +10,7 @@ Disconnected and air-gapped deployments are a core requirement for many Red Hat 
 
 | Pattern | % of Issues | Rule |
 |---------|-------------|------|
-| Missing images from manifests | ~30% | `csv-relatedimages` |
+| Missing images from manifests | ~30% | `image-manifest-complete` |
 | Hardcoded external dependencies | ~25% | `python-imports` |
 | Image tags instead of digests | ~10% | `no-image-tags` |
 | Runtime external URL calls | ~10% | `no-runtime-egress` |
@@ -37,14 +37,14 @@ python3 main.py /path/to/target/repo --operator-path /tmp/opendatahub-operator  
 python3 main.py /path/to/target/repo --exceptions /path/to/exceptions.yaml      # custom exceptions
 ```
 
-Exit code is `0` for READY/WARNING, `1` for NOT READY.
+Exit code is `0` for READY, `1` for NOT READY.
 
 ### Individual rules
 
 Each rule is a standalone script:
 
 ```bash
-python3 rules/csv_relatedimages.py /path/to/target/repo
+python3 rules/image_manifest_complete.py /path/to/target/repo
 python3 rules/params_env.py /path/to/target/repo
 python3 rules/no_image_tags.py /path/to/target/repo
 python3 rules/no_runtime_egress.py /path/to/target/repo
@@ -57,74 +57,177 @@ All rules output JSON to stdout with `rule`, `passed`, and `findings` fields.
 ## Output
 
 ```
-Disconnected Readiness Score: WARNING
+Disconnected Readiness Score: NOT READY
 
-  BLOCKER  image-manifest-complete   2 images in code missing from CSV relatedImages
+  FAIL     image-manifest-complete   2 blocker(s)
   PASS     no-image-tags             All checks passed
-  WARNING  no-runtime-egress         1 warning(s)
+  PASS     no-runtime-egress         All checks passed
   PASS     python-imports-bundled    All checks passed
 
-Blockers: 1 | Warnings: 1 | Passed: 2
+Blockers: 2 | Passed: 3
 ```
 
 Reports are also generated as markdown (default) or JSON (`--report json`). Write to a file with `--output report.md`.
 
 ## Rules
 
-### csv-relatedimages (alias: `csv`)
+### image-manifest-complete (alias: `csv`)
 
-Auto-detects whether the target repo uses `RELATED_IMAGE_*` env vars (opendatahub-operator pattern) or static CSV `relatedImages`, then checks that every container image referenced in code is accounted for. When the env var pattern is detected, the orchestrator clones the opendatahub-operator and cross-references against the authoritative manifest. Only git-tracked files are scanned.
+Checks that every container image referenced in code is accounted for in the disconnected manifest. Auto-detects whether the repo uses `RELATED_IMAGE_*` env vars (opendatahub-operator pattern) or static CSV `relatedImages`.
 
-Cross-reference produces three check types:
-- Image ref uses a `RELATED_IMAGE` var not in the manifest &rarr; **blocker**
-- Repo defines a var not in the manifest &rarr; **warning** (stale)
-- Manifest vars not referenced in repo &rarr; **info**
+**Files scanned:** `.go`, `.py`, `.yaml`, `.yml`, `.json`, `.sh` (git-tracked only). Comments (`//`, `#`) are skipped. Directories managed by `params.env` + kustomize are skipped (covered by `params-env-wiring`).
+
+**Severity logic:**
+
+| Condition | Severity |
+|-----------|----------|
+| Image ref uses a `RELATED_IMAGE` var not in operator manifest | blocker |
+| Hardcoded image with no `RELATED_IMAGE_*` wiring | blocker |
+| Image near a related env var (same file/sibling) | info |
+| Manifest vars not referenced in repo | info |
+
+When the env var pattern is detected, the orchestrator clones the opendatahub-operator and cross-references against the authoritative manifest.
 
 ### params-env-wiring (alias: `params_env`)
 
-Validates repos using the `params.env` + kustomize pattern. Requires `kustomize` binary on PATH. Validates the full wiring chain: `params.env` -> kustomize configMap -> rendered manifest -> Go `os.Getenv`. Detects hardcoded images not sourced from params.env (**blocker**), unwired params.env keys (**warning**), and orphan Go `os.Getenv` calls (**blocker**). Supports `.verify-params-env-ignore` for excluding keys. When the orchestrator provides operator manifest vars, cross-references mapped `RELATED_IMAGE_*` vars against the manifest.
+Validates repos using the `params.env` + kustomize pattern. Checks the full wiring chain: `params.env` &rarr; kustomize configMap &rarr; rendered manifest &rarr; Go `os.Getenv`. Requires `kustomize` binary on PATH.
+
+When `manifest_source` is available (from operator manifest mapping), uses the operator's kustomize folders as the source of truth: copies the entire manifest source folder to a temp dir, replaces all `params.env` image values with probe sentinels, then builds every `kustomization.yaml` in the copy. Any non-sentinel image in the rendered output is hardcoded and not wired through `params.env`. Falls back to `discover_overlays()` (scanning the repo for co-located `params.env` + `kustomization.yaml` dirs) when no manifest source mapping is available.
+
+**Files scanned:** `params.env`, kustomize overlays, `.go` files (git-tracked only)
+
+**Severity logic:**
+
+| Condition | Severity |
+|-----------|----------|
+| Hardcoded image not sourced from params.env | blocker |
+| Orphan Go `os.Getenv` call with no matching rendered manifest var | blocker |
+| `RELATED_IMAGE_*` var mapped from params.env not in operator manifest | blocker |
+| Unwired params.env key (defined but not consumed by kustomize) | info |
+| Key listed in `.verify-params-env-ignore` | skipped |
+
+Supports `.verify-params-env-ignore` for excluding keys. When the orchestrator provides operator manifest vars, cross-references mapped `RELATED_IMAGE_*` vars against the manifest.
 
 ### no-image-tags (alias: `tags`)
 
-Enforces `@sha256:` digest refs; rejects mutable tags (`:latest`, `:v1.2.3`). Tags cannot be reliably mirrored. Source code files (`.go`, `.py`, `.ts`, `.sh`) escalate to **blocker** severity; manifest files produce **warnings**; test/build/CI files produce **info**. Directories managed by `params.env` + kustomize are skipped. HTTP/HTTPS URLs are excluded from image detection. Only git-tracked files are scanned.
+Enforces `@sha256:` digest refs; rejects mutable tags (`:latest`, `:v1.2.3`). Tags cannot be reliably mirrored in disconnected environments.
+
+**Files scanned:** `.go`, `.py`, `.yaml`, `.yml`, `.json`, `.toml`, `Dockerfile`, `Containerfile` (git-tracked only). Directories managed by `params.env` + kustomize are skipped entirely.
+
+**Severity logic:**
+
+| Condition | Severity |
+|-----------|----------|
+| Tagged image in any scanned file | blocker |
+| Image uses `@sha256:` digest | pass (not reported) |
+
+HTTP/HTTPS URLs are excluded from image detection. `params.env` files are excluded.
 
 ### no-runtime-egress (alias: `egress`)
 
-Scans Go, Python, TypeScript, and shell source for patterns indicating outbound HTTP calls at runtime (`http.Get`, `requests.get`, `fetch()`, `curl`, etc.). Build-time usage in Dockerfiles, Makefiles, and CI scripts is excluded. Test files produce **info** severity. Hardcoded external URLs are **blockers**; configurable/mirrorable endpoints are **info**. Only git-tracked files are scanned.
+Detects outbound HTTP calls in runtime code that would fail in disconnected environments.
+
+**Files scanned:** `.go`, `.py`, `.ts`, `.tsx`, `.sh` (git-tracked only). Comments (`//`, `#`) are skipped.
+
+**Patterns detected:** `http.Get/Post/Do`, `requests.get`, `fetch()`, `axios`, `curl`, `wget`, `net.Dial`, and more.
+
+**Severity logic:**
+
+| Condition | Severity |
+|-----------|----------|
+| Hardcoded external URL (`https://api.example.com`) | blocker |
+| Cluster-internal URL (`kubernetes.default.svc`, `*.svc.cluster.local`, `localhost`) | info |
+| Configurable URL (via env var, config, `viper`, etc.) | info |
+| Network call with no hardcoded URL (relative/variable) | info |
 
 ### python-imports (alias: `python`)
 
-Validates Python dependencies against the known-bundled list. Checks `requirements.txt`, `setup.py`, `pyproject.toml`, and runtime `pip install` calls. Unbundled runtime dependencies are **blockers**. Only git-tracked files are scanned.
+Validates Python dependencies against the known-bundled list. Packages not pre-installed in the disconnected environment will fail to install at runtime.
+
+**Files scanned:** `requirements*.txt`, `setup.py`, `pyproject.toml`, `.py` files (for `pip install` calls) — git-tracked only
+
+**Severity logic:**
+
+| Condition | Severity |
+|-----------|----------|
+| Unbundled package in production requirements | blocker |
+| Runtime `pip install` / `subprocess.run(["pip", ...])` call | blocker |
+| Package from known PyPI mirror | pass |
 
 ### operator-manifest (alias: `manifest`)
 
 Parses the opendatahub-operator source to build the authoritative image manifest (100+ `RELATED_IMAGE_*` env vars across 18 components). Not run by default — included when `csv` or `params_env` detect a pattern needing cross-referencing, or when explicitly selected with `--rules manifest`.
 
+### production-scope
+
+Not a rule itself, but a cross-cutting optimization for Go repos. Parses all Dockerfiles to find `go build` targets (supports multiple targets per Dockerfile), then runs `go list -deps -json` to compute the transitive dependency set. Files outside the production binary's import graph are downgraded from blocker to info. Only affects `.go` files; non-Go files use existing rule logic. Disabled with `--no-production-scope`.
+
+When operator manifest source folder mapping is available, also scopes YAML files to the operator-referenced kustomize/helm graph.
+
 ## Scoring
 
 | Score | Meaning |
 |-------|---------|
-| **READY** | All rules pass |
-| **WARNING** | No blockers, but warnings need manual review |
-| **NOT READY** | One or more blocker-level failures |
+| **READY** | All rules pass — no blocker findings |
+| **NOT READY** | One or more blocker-level findings |
 
 Severity levels for individual findings:
 
 | Severity | Meaning |
 |----------|---------|
-| `blocker` | Fails the score — must be fixed for disconnected readiness |
-| `warning` | Needs manual review but doesn't fail the score |
-| `info` | Excluded file or configurable pattern — informational only |
+| `blocker` | Will or may break disconnected — must be fixed or granted an exception |
+| `info` | Excluded file, configurable pattern, or informational — does not block |
 
-## Exclusions
+## Exception System
 
-All rules exclude these paths from blocker-level findings (they produce `info` severity instead):
+All policy-based exclusions (test dirs, CI dirs, build files, etc.) are configured in `config/exceptions.yaml` rather than hardcoded in rules. Exceptions downgrade matching blocker findings to **info** severity.
 
-- Test files: `*_test.go`, `test_*.py`, `test/`, `testdata/`, `e2e/`
-- CI config: `.github/`, `.tekton/`
-- Build files: `Dockerfile`, `Containerfile`, `*.Dockerfile`
-- Lint rules: `semgrep.yaml`
-- Untracked files: only git-tracked files are scanned
+### Exception fields
+
+| Field     | Required | Description |
+|-----------|----------|-------------|
+| `rule`    | yes      | Rule name, comma-separated list, or `*` for all rules |
+| `reason`  | yes      | Why this exception exists |
+| `path`    | no       | Glob pattern matched against finding file path |
+| `paths`   | no       | List of glob patterns — matches if ANY pattern matches |
+| `image`   | no       | Glob pattern matched against finding image ref |
+| `message` | no       | Glob pattern matched against finding message |
+| `repo`    | no       | Repository name filter (matches basename or `org/repo` form) |
+
+Path patterns support `**/` prefix to match at any depth (e.g. `**/Dockerfile` matches both `Dockerfile` and `build/Dockerfile`).
+
+### Default exceptions
+
+The default `config/exceptions.yaml` includes:
+
+- **Test directories:** `test/`, `tests/`, `testdata/`, `testing/`, `e2e/`, `mocks/`, `contract-tests/`, `hack/`
+- **Test file suffixes:** `*_test.go`, `test_*.py`, `*.test.ts`, `*.spec.ts`
+- **CI directories:** `.github/`, `.tekton/`, `ci/`
+- **Non-production:** `docs/`, `examples/`
+- **Build files:** `**/Dockerfile`, `**/*.Dockerfile`, `**/Containerfile`
+- **Lint config:** `**/semgrep.yaml`, `**/semgrep.yml`
+- **OLM scorecard:** `config/scorecard/` (image rules only)
+
+### Custom exceptions
+
+Override with `--exceptions /path/to/file.yaml`:
+
+```yaml
+exceptions:
+  - rule: no-runtime-egress
+    repo: opendatahub-io/odh-dashboard
+    paths:
+      - "frontend/src/services/**"
+    reason: "Frontend services call the backend BFF, not external endpoints"
+
+  - rule: "image-manifest-complete, no-image-tags"
+    path: "config/scorecard/**"
+    reason: "OLM scorecard config — test images, not production"
+```
+
+### Skipped directories
+
+The following directories are always fully skipped (no findings at all): `.git`, `vendor`, `node_modules`, `__pycache__`, `.tox`, `.devcontainer`.
 
 ## Configuration
 
@@ -145,7 +248,7 @@ pypi_mirrors:
 
 ### `.verify-params-env-ignore`
 
-Opt-out file for the `params_env` rule. Place it in the target repo root to exclude specific `params.env` keys from validation. Keys listed here skip probe checks and wiring validation — no blocker or warning will be raised for them.
+Opt-out file for the `params_env` rule. Place it in the target repo root to exclude specific `params.env` keys from validation. Keys listed here skip probe checks and wiring validation.
 
 ```yaml
 - key: odh_notebook_controller_image
@@ -157,32 +260,6 @@ Opt-out file for the `params_env` rule. Place it in the target repo root to excl
 ```
 
 Each entry requires `key` and `reason`. The optional `reference` field can link to a tracking issue.
-
-### `config/exceptions.yaml`
-
-Exception rules that downgrade matching blocker/warning findings to **info** severity. Use `--exceptions /path/to/file.yaml` to override the default location.
-
-Each exception supports these fields:
-
-| Field     | Required | Description                                                                  |
-|-----------|----------|------------------------------------------------------------------------------|
-| `rule`    | yes      | Rule name or comma-separated list (e.g. `no-image-tags, no-runtime-egress`)  |
-| `reason`  | yes      | Why this exception exists                                                    |
-| `path`    | no       | Glob pattern matched against finding file path (e.g. `install/*`)            |
-| `image`   | no       | Glob pattern matched against finding image ref                               |
-| `message` | no       | Substring match against finding message                                      |
-| `repo`    | no       | Repository name filter (matches basename or `org/repo` form)                 |
-
-```yaml
-exceptions:
-  - rule: no-image-tags, no-runtime-egress
-    path: "install/*"
-    reason: "Historical versioned release snapshots — immutable, not edited"
-
-  - rule: no-runtime-egress
-    repo: opendatahub-io/odh-dashboard
-    reason: "Dashboard proxies all external calls through the backend"
-```
 
 ## PR Integration
 
@@ -304,7 +381,7 @@ pip install pytest pytest-cov pyyaml jinja2
 
 ```bash
 python -m pytest tests/ -v                                 # all tests
-python -m pytest tests/test_csv_relatedimages.py -v        # single file
+python -m pytest tests/test_image_manifest_complete.py -v  # single file
 python -m pytest tests/test_main.py::TestParseArgs -v      # single class
 python -m pytest tests/ -v --cov=. --cov-report=term       # with coverage
 ```
