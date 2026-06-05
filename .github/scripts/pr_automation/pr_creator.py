@@ -45,36 +45,42 @@ class PRCreator:
         Returns True on success, False on failure.
         """
         try:
+            print(f"    [ensure_clean_branch] Starting for '{branch_name}' (base: {base_branch})")
+
             # Get base SHA for the new branch
             source = repo.get_branch(base_branch)
             base_sha = source.commit.sha
+            print(f"    [ensure_clean_branch] Base SHA: {base_sha[:12]}")
 
             # Explicitly close any open PRs from this branch before deletion
             # to avoid a race where GitHub hasn't processed the auto-closure
             # by the time we create a new PR from the same branch name.
             try:
                 open_prs = list(repo.get_pulls(state='open', head=f"{repo.owner.login}:{branch_name}"))
-                for pr in open_prs:
-                    pr.edit(state='closed')
-                    print(f"    Closed existing PR #{pr.number} from branch '{branch_name}'")
-            except Exception:
-                pass
+                if open_prs:
+                    for pr in open_prs:
+                        pr.edit(state='closed')
+                        print(f"    [ensure_clean_branch] Closed existing PR #{pr.number}")
+                else:
+                    print(f"    [ensure_clean_branch] No open PRs found for branch '{branch_name}'")
+            except Exception as e:
+                print(f"    [ensure_clean_branch] PR check skipped: {e}")
 
             # Check if branch exists and delete it
             try:
-                repo.get_git_ref(f"refs/heads/{branch_name}")
-                repo.delete_git_ref(f"refs/heads/{branch_name}")
-                print(f"    Deleted existing branch '{branch_name}'")
-            except Exception:
-                pass
+                ref = repo.get_git_ref(f"heads/{branch_name}")
+                ref.delete()
+                print(f"    [ensure_clean_branch] Deleted existing branch '{branch_name}'")
+            except Exception as e:
+                print(f"    [ensure_clean_branch] Branch '{branch_name}' not found or already deleted: {e}")
 
             # Create fresh branch
             repo.create_git_ref(f"refs/heads/{branch_name}", base_sha)
-            print(f"    Created fresh branch '{branch_name}' from {base_branch}")
+            print(f"    [ensure_clean_branch] Created fresh branch '{branch_name}' from {base_branch}")
             return True
 
         except Exception as e:
-            print(f"    Failed to ensure clean branch '{branch_name}': {e}")
+            print(f"    [ensure_clean_branch] FAILED for '{branch_name}': {e}")
             return False
 
     def create_disconnected_readiness_pr(self, repo, branch_name_suffix: str = "", dry_run: bool = False, trigger_reason: str = "manual") -> PRCreationResult:

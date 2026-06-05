@@ -1,3 +1,4 @@
+# template-version: 2025-06-05-v1
 name: Disconnected Readiness
 on:
   pull_request:

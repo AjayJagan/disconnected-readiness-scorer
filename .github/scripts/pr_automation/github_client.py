@@ -82,9 +82,13 @@ class GitHubClient:
         }
 
     def get_account(self, org_name: str) -> Tuple[Any, str, int]:
-        """Get organization account with retry logic."""
+        """Get account with retry logic. Tries organization first, falls back to user."""
         def _get_account():
-            account = self.client.get_organization(org_name)
-            return account, "organization", account.public_repos
+            try:
+                account = self.client.get_organization(org_name)
+                return account, "organization", account.public_repos
+            except Exception:
+                account = self.client.get_user(org_name)
+                return account, "user", account.public_repos
 
         return retry_github_operation(_get_account)

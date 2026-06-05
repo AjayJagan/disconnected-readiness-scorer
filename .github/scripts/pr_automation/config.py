@@ -30,7 +30,7 @@ class AutomationConfig:
                 yaml = YAML(typ='safe', pure=True)  # Equivalent to yaml.safe_load
                 with open(config_file, 'r') as f:
                     config = yaml.load(f) or {}
-                return set(config.get('excluded_repositories', []))
+                return set(config.get('excluded_repositories') or [])
             else:
                 print("Warning: No exclusion configuration found, proceeding without exclusions")
                 return set()

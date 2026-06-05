@@ -47,7 +47,7 @@ class WorkflowDetector:
         for branch_name in fixed_branches:
             try:
                 # Check if our branch exists
-                repo.get_git_ref(f"refs/heads/{branch_name}")
+                repo.get_git_ref(f"heads/{branch_name}")
                 # If branch exists, check if there's an open PR from it
                 def _get_branch_prs():
                     return list(repo.get_pulls(state='open', head=f"{repo.owner.login}:{branch_name}"))

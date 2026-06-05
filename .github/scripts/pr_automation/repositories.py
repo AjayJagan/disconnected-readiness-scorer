@@ -25,9 +25,10 @@ class RepositoryClassification:
 class RepositoryClassifier:
     """Classifies repositories for processing operations."""
 
-    def __init__(self, exclusions: Set[str], workflow_detector: WorkflowDetector):
+    def __init__(self, exclusions: Set[str], workflow_detector: WorkflowDetector, force_update: bool = False):
         self.exclusions = exclusions
         self.workflow_detector = workflow_detector
+        self.force_update = force_update
         self.categories = {
             READY_FOR_WORKFLOW: 'Ready for Processing',
             ALREADY_HAS_WORKFLOW: 'Already Has Workflow',
@@ -67,10 +68,10 @@ class RepositoryClassifier:
             # Use workflow detector's decision logic
             should_process, reason = self.workflow_detector.should_process_repository(repo)
 
-            # Override for template changes: repositories with existing workflows should be processed
-            if trigger_reason == 'template_change' and reason.startswith(ALREADY_HAS_WORKFLOW):
+            # Override: force update for template changes or when specific repos are targeted
+            if reason.startswith(ALREADY_HAS_WORKFLOW) and (trigger_reason == 'template_change' or self.force_update):
                 should_process = True
-                reason = f"Template change: forcing update for existing workflow"
+                reason = f"Forcing update for existing workflow (trigger: {trigger_reason})"
                 category = READY_FOR_WORKFLOW
             else:
                 # Determine category based on reason

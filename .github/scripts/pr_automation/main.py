@@ -44,16 +44,26 @@ class DRSAutomation:
 
         return organizations
 
+    def _parse_repositories_input(self):
+        """Parse optional repository filter from INPUT_REPOSITORIES environment variable.
+        Returns a list of full repo names (e.g., ['AjayJagan/batch-gateway']) or empty list if not set.
+        """
+        repos_input = os.getenv('INPUT_REPOSITORIES', '')
+        return [r.strip() for r in repos_input.split(',') if r.strip()]
+
     def run(self):
         """Main entry point for DRS PR automation."""
         # Parse inputs from environment (set by GitHub Actions)
         organizations = self._parse_organizations_input()
+        target_repos = self._parse_repositories_input()
         dry_run = os.getenv('INPUT_DRY_RUN', 'true').lower() == 'true'
         force_full_scan = os.getenv('INPUT_FORCE_FULL_SCAN', 'false').lower() == 'true'
         trigger_reason = os.getenv('TRIGGER_REASON', 'manual')
 
         print("DRS PR AUTOMATION")
         print(f"Organizations: {organizations}")
+        if target_repos:
+            print(f"Target repositories: {target_repos}")
         print(f"Trigger reason: {trigger_reason}")
         print(f"Dry run: {dry_run}")
         if force_full_scan:
@@ -90,7 +100,7 @@ class DRSAutomation:
                 print("Continuing anyway, but processing may be throttled...")
 
         # Initialize classifier and counters
-        classifier = RepositoryClassifier(exclusions, self.workflow_detector)
+        classifier = RepositoryClassifier(exclusions, self.workflow_detector, force_update=bool(target_repos))
         total_orgs_processed = 0
         total_repos = 0
         success_count = 0
@@ -127,13 +137,27 @@ class DRSAutomation:
                 print(f" {reason} - performing full repository scan...")
                 total_orgs_processed += 1
 
-                # Get all repositories and classify them (with retry)
+                # Get repositories (filtered if INPUT_REPOSITORIES is set)
                 from .utils import retry_github_operation
 
-                def _get_repositories():
-                    return list(account.get_repos())
+                if target_repos:
+                    repositories = []
+                    for repo_full_name in target_repos:
+                        if repo_full_name.startswith(f"{org_name}/"):
+                            try:
+                                def _get_repo(name=repo_full_name):
+                                    return self.github_client.client.get_repo(name)
+                                repositories.append(retry_github_operation(_get_repo))
+                            except Exception as e:
+                                print(f"  Warning: Could not fetch {repo_full_name}: {e}")
+                    if not repositories:
+                        print(f"  No target repositories found for {org_name}, skipping")
+                        continue
+                else:
+                    def _get_repositories():
+                        return list(account.get_repos())
+                    repositories = retry_github_operation(_get_repositories)
 
-                repositories = retry_github_operation(_get_repositories)
                 total_repos += len(repositories)
 
                 # Classify all repositories at once (with exclusions)
@@ -179,8 +203,6 @@ class DRSAutomation:
                                 if result.action == 'created':
                                     print(f"     Created PR: {result.pr_url}")
                                     print(f"     Rules: {result.rules}")
-                                    if result.central_exceptions_found:
-                                        print(f"     Central exceptions found: {result.central_exceptions_found}")
                                 else:
                                     print(f"     {result.reason}")
                                 success_count += 1

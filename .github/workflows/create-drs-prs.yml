@@ -23,6 +23,10 @@ on:
         default: 'false'
         type: choice
         options: ['true', 'false']
+      repositories:
+        description: 'Comma-separated list of specific repos (e.g., AjayJagan/batch-gateway). Leave empty to scan all.'
+        required: false
+        default: ''
 
   # Weekly scheduled execution
   schedule:
@@ -52,6 +56,7 @@ jobs:
       with:
         client-id: ${{ secrets.GH_APP_DR_CLIENT_ID }}
         private-key: ${{ secrets.GH_APP_DR_PRIVATE_KEY }}
+        owner: ${{ github.event.inputs.organizations || 'opendatahub-io' }}
 
     - name: Set up Python
       uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
@@ -80,6 +85,7 @@ jobs:
           echo "organizations=${{ github.event.inputs.organizations || 'opendatahub-io' }}" >> $GITHUB_OUTPUT
           echo "dry_run=${{ github.event.inputs.dry_run || 'true' }}" >> $GITHUB_OUTPUT
           echo "force_full_scan=${{ github.event.inputs.force_full_scan || 'false' }}" >> $GITHUB_OUTPUT
+          echo "repositories=${{ github.event.inputs.repositories || '' }}" >> $GITHUB_OUTPUT
         fi
 
     - name: Run DRS PR Automation
@@ -89,6 +95,7 @@ jobs:
         INPUT_DRY_RUN: ${{ steps.context.outputs.dry_run }}
         INPUT_FORCE_FULL_SCAN: ${{ steps.context.outputs.force_full_scan }}
         TRIGGER_REASON: ${{ steps.context.outputs.trigger_reason }}
+        INPUT_REPOSITORIES: ${{ steps.context.outputs.repositories }}
       run: |
         cd .github/scripts
         PYTHONPATH=. python -m pr_automation
