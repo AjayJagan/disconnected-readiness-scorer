@@ -9,7 +9,7 @@ If the repo uses RELATED_IMAGE_* env vars (the opendatahub-operator pattern), th
 checks that every image reference maps to a RELATED_IMAGE_* variable. If the repo uses
 a static CSV, it checks that every image appears in relatedImages.
 
-Exclusions (test files, CI, etc.) are handled by the exception system in config/exceptions.yaml.
+Exclusions (test files, CI, etc.) are handled by the exception system in config/config.yaml.
 """
 
 from __future__ import annotations

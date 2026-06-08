@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Disconnected Readiness Scanner Config",
+  "description": "Configuration for the disconnected readiness scanner. Used by both central config (config/config.yaml) and per-repo config (.disconnected-readiness/config.yaml).",
+  "type": "object",
+  "properties": {
+    "registries": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Approved internal container registries. Images from these registries are treated as safe. Typically only used in central config."
+    },
+    "kustomize_overlays": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Kustomize overlay dirs (relative to repo root) to validate. When set, the params-env-wiring rule only builds these dirs. Typically only used in per-repo config."
+    },
+    "known_mirrors": {
+      "type": "object",
+      "description": "Known-safe packages and mirrors for Python dependency validation.",
+      "properties": {
+        "bundled_packages": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Python packages guaranteed available in internal mirrors."
+        },
+        "pypi_mirrors": {
+          "type": "array",
+          "items": { "type": "string", "format": "uri" },
+          "description": "Internal PyPI mirror URLs."
+        }
+      },
+      "additionalProperties": false
+    },
+    "exceptions": {
+      "type": "array",
+      "description": "Exception rules that downgrade matching blocker findings to info severity.",
+      "items": {
+        "type": "object",
+        "required": ["rule", "reason"],
+        "properties": {
+          "rule": {
+            "type": "string",
+            "description": "Rule name, comma-separated list, or '*' for all rules."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why this exception exists."
+          },
+          "path": {
+            "type": "string",
+            "description": "Glob pattern matched against finding file path."
+          },
+          "paths": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "List of glob patterns — matches if ANY pattern matches."
+          },
+          "image": {
+            "type": "string",
+            "description": "Glob pattern matched against finding image ref."
+          },
+          "message": {
+            "type": "string",
+            "description": "Substring matched against finding message."
+          },
+          "repo": {
+            "type": "string",
+            "description": "Repository name filter (matches basename or org/repo form). Only allowed in central config."
+          },
+          "reference": {
+            "type": "string",
+            "description": "Tracking URL (GitHub Issue or Jira ticket)."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "params_env_ignore": {
+      "type": "array",
+      "description": "params.env keys to exclude from validation. Typically only used in per-repo config.",
+      "items": {
+        "type": "object",
+        "required": ["key", "reason"],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "The params.env key name to ignore."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why this key is excluded."
+          },
+          "reference": {
+            "type": "string",
+            "description": "Tracking URL for the exclusion."
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

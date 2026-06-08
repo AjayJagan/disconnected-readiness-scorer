@@ -1,14 +1,24 @@
-# Exception rules for disconnected-readiness-scorer.
-# Each exception downgrades matching blocker findings to info severity.
+# yaml-language-server: $schema=../schemas/config.schema.json
 #
-# Fields:
-#   rule:    (required) Rule name, comma-separated list, or "*" for all rules
-#   path:    (optional) Glob pattern matched against finding file path
-#   paths:   (optional) List of glob patterns — matches if ANY pattern matches
-#   image:   (optional) Glob pattern matched against finding image ref
-#   message: (optional) Substring match against finding message
-#   repo:    (optional) Repository name filter (matches basename or org/repo form)
-#   reason:  (required) Why this exception exists
+# Central configuration for the disconnected readiness scanner.
+# Applies to all scanned repos. Per-repo overrides go in
+# .disconnected-readiness/config.yaml in the target repository.
+
+registries:
+  - registry.redhat.io
+  - brew.registry.redhat.io
+  - quay.io/opendatahub
+  - quay.io/modh
+  - registry.access.redhat.com
+  - image-registry.openshift-image-registry.svc
+
+known_mirrors:
+  bundled_packages:
+    - codeflare-sdk
+    - odh-manifest
+    - opendatahub-operator
+  pypi_mirrors:
+    - https://pypi.corp.redhat.com/simple/
 
 exceptions:
   # Test directories

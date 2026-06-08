@@ -17,10 +17,16 @@ except ModuleNotFoundError:
     )
 
 IMAGE_REF_PATTERN = re.compile(
-    r'(https?://)?'
-    r'((?:[\w.\-]+(?:\.[\w.\-]+)+(?::\d+)?/)?[\w.\-]+/[\w.\-]+)'
-    r'([:@][\w.\-:]+)'
+    r'(https?://|oci://)?'
+    r'((?:[\w.\-]+(?:\.[\w.\-]+)+(?::\d+)?/)?[\w.\-]+(?:/[\w.\-]+)+)'
+    r'([:@][\w.\-:]+)?'
 )
+
+K8S_UNQUALIFIED_IMAGE = re.compile(
+    r'''(?:^|[\s\-])image:\s*['"]?([a-zA-Z][\w.\-]+):([\w.\-]+)['"]?\s*$'''
+)
+
+YAML_EXTENSIONS = {".yaml", ".yml"}
 
 SOURCE_EXTENSIONS = {".go", ".py", ".ts", ".tsx", ".sh"}
 
@@ -60,32 +66,58 @@ def scan_file(filepath: Path, root: Path, production_scope=None) -> List[Finding
     in_prod_go = is_in_production_scope(filepath, production_scope)
     in_prod_yaml = is_yaml_in_production_scope(filepath, production_scope)
 
+    is_yaml = filepath.suffix in YAML_EXTENSIONS or filepath.name == "params.env"
+    found_on_line = set()
+
     for i, line in enumerate(lines, 1):
         if line.strip().startswith("#") or line.strip().startswith("//"):
             continue
 
         for match in IMAGE_REF_PATTERN.finditer(line):
-            if match.group(1):
-                continue
+            prefix = match.group(1) or ""
             repo_part = match.group(2)
             ref_part = match.group(3)
 
-            if "/" not in repo_part:
-                continue
-            if any(len(p) <= 1 for p in repo_part.split("/")):
-                continue
-            if ref_part.startswith("@sha256:"):
+            if prefix.startswith("http"):
                 continue
 
+            is_oci = prefix == "oci://"
+
+            if not is_oci:
+                if not ref_part:
+                    continue
+                if "/" not in repo_part:
+                    continue
+                if any(len(p) <= 1 for p in repo_part.split("/")):
+                    continue
+                if ref_part.startswith("@sha256:"):
+                    continue
+
+            if is_oci:
+                if ref_part and ref_part.startswith("@sha256:"):
+                    continue
+                image_str = f"oci://{repo_part}"
+                if ref_part:
+                    image_str += ref_part
+                    base_msg = (f"OCI URI `{image_str}` uses tag '{ref_part}' instead of digest. "
+                                f"Must use @sha256: digest for disconnected mirroring.")
+                else:
+                    base_msg = (f"OCI URI `{image_str}` has no digest pin. "
+                                f"Must use @sha256: digest for disconnected mirroring.")
+            else:
+                image_str = f"{repo_part}{ref_part}"
+                base_msg = (f"Image `{image_str}` uses tag '{ref_part}' instead of digest. "
+                            f"Tags cannot be reliably mirrored.")
+
             relative = str(filepath.relative_to(root))
-            base_msg = (f"Image `{repo_part}{ref_part}` uses tag '{ref_part}' instead of digest. "
-                        f"Tags cannot be reliably mirrored.")
             if is_excluded_file(filepath):
                 severity = "info"
                 msg = f"{base_msg} File is excluded (params.env)."
             else:
                 severity = "blocker"
-                if is_source_code(filepath):
+                if is_oci:
+                    msg = base_msg
+                elif is_source_code(filepath):
                     msg = f"{base_msg} Hardcoded in source code."
                 else:
                     msg = f"{base_msg} Manifest file not managed by params.env."
@@ -95,13 +127,45 @@ def scan_file(filepath: Path, root: Path, production_scope=None) -> List[Finding
                     severity = "info"
                     msg += " [out of production scope]"
 
+            found_on_line.add(i)
             findings.append(Finding(
                 severity=severity,
                 file=relative,
                 line=i,
-                image=f"{repo_part}{ref_part}",
+                image=image_str,
                 message=msg,
             ))
+
+        if is_yaml and i not in found_on_line:
+            m = K8S_UNQUALIFIED_IMAGE.search(line.strip())
+            if m:
+                name, tag = m.group(1), m.group(2)
+                if tag.startswith("sha256"):
+                    continue
+                image_str = f"{name}:{tag}"
+                relative = str(filepath.relative_to(root))
+                base_msg = (f"Unqualified image `{image_str}` in k8s manifest "
+                            f"uses tag ':{tag}' instead of digest.")
+
+                if is_excluded_file(filepath):
+                    severity = "info"
+                    msg = f"{base_msg} File is excluded (params.env)."
+                else:
+                    severity = "blocker"
+                    msg = f"{base_msg} Manifest file not managed by params.env."
+
+                if severity == "blocker":
+                    if in_prod_go is False or in_prod_yaml is False:
+                        severity = "info"
+                        msg += " [out of production scope]"
+
+                findings.append(Finding(
+                    severity=severity,
+                    file=relative,
+                    line=i,
+                    image=image_str,
+                    message=msg,
+                ))
 
     return findings
 

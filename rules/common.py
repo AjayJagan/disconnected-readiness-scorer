@@ -1,4 +1,5 @@
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -103,6 +104,38 @@ def _collect_kustomize_tree(overlay_dir: Path, dirs: set[Path]):
                     _collect_kustomize_tree(target, dirs)
             elif stripped and not stripped.startswith("#"):
                 in_resources = False
+
+
+CONFIG_DIR = ".disconnected-readiness"
+CONFIG_FILE = "config.yaml"
+
+
+def load_repo_config(root: Path) -> dict:
+    """Load per-repo scanner config from .disconnected-readiness/config.yaml."""
+    return load_config_file(root / CONFIG_DIR / CONFIG_FILE)
+
+
+def load_config_file(config_path: Path) -> dict:
+    """Load a YAML config file, returning empty dict if missing."""
+    import yaml
+
+    if not config_path.exists():
+        return {}
+    try:
+        text = config_path.read_text()
+    except (OSError, UnicodeDecodeError):
+        return {}
+    try:
+        result = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        print(f"  Warning: failed to parse {config_path}: {exc}", file=sys.stderr)
+        return {}
+    if result is None:
+        return {}
+    if not isinstance(result, dict):
+        print(f"  Warning: {config_path} must be a YAML mapping, got {type(result).__name__}", file=sys.stderr)
+        return {}
+    return result
 
 
 def get_tracked_files(repo_root: Path) -> Optional[set[Path]]:

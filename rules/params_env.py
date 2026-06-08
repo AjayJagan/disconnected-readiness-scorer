@@ -13,14 +13,14 @@ import tempfile
 from pathlib import Path
 
 try:
-    from rules.common import Finding, RuleResult, SKIP_DIRS
+    from rules.common import Finding, RuleResult, SKIP_DIRS, load_repo_config
 except ModuleNotFoundError:
-    from common import Finding, RuleResult, SKIP_DIRS
+    from common import Finding, RuleResult, SKIP_DIRS, load_repo_config
 
 try:
     from rules.params_env_utils import (
         kustomize_available, kustomize_build, discover_overlays,
-        find_params_env_files, parse_params_env, load_ignore_file,
+        find_params_env_files, parse_params_env, load_ignore_keys,
         create_probe_overlay, extract_all_images,
         write_probe_params_env,
         extract_configmap_key_refs, extract_kustomize_replacement_keys,
@@ -30,7 +30,7 @@ try:
 except ModuleNotFoundError:
     from params_env_utils import (
         kustomize_available, kustomize_build, discover_overlays,
-        find_params_env_files, parse_params_env, load_ignore_file,
+        find_params_env_files, parse_params_env, load_ignore_keys,
         create_probe_overlay, extract_all_images,
         write_probe_params_env,
         extract_configmap_key_refs, extract_kustomize_replacement_keys,
@@ -116,8 +116,12 @@ def _process_manifest_source_folder(
     all_repo_params: dict[str, str],
     all_manifest_related_vars: set[str],
     env_mappings_set: set[str],
+    overlay_dirs: list[str] | None = None,
 ) -> int:
     """Process all kustomization dirs under a manifest_source folder.
+
+    If overlay_dirs is set, only those dirs (relative to root) are probed
+    for hardcoded images. Otherwise all kustomization.yaml dirs are scanned.
 
     Returns the number of overlays with params.env found.
     """
@@ -146,10 +150,27 @@ def _process_manifest_source_folder(
                     rel = params_path.relative_to(source_dir)
                     write_probe_params_env(params_path, tmp_source / rel, ignored_keys)
 
-            for kustomization in sorted(tmp_source.rglob("kustomization.yaml")):
-                kdir = kustomization.parent
-                if any(d in kustomization.parts for d in SKIP_DIRS):
-                    continue
+            if overlay_dirs is not None:
+                probe_dirs = []
+                source_name = source_dir.name
+                for od in overlay_dirs:
+                    od_path = Path(od)
+                    if od_path.parts and od_path.parts[0] == source_name:
+                        rel = Path(*od_path.parts[1:])
+                    else:
+                        rel = od_path
+                    candidate = tmp_source / rel
+                    if ".." in rel.parts:
+                        continue
+                    if (candidate / "kustomization.yaml").exists():
+                        probe_dirs.append(candidate)
+            else:
+                probe_dirs = sorted(
+                    k.parent for k in tmp_source.rglob("kustomization.yaml")
+                    if not any(d in k.parts for d in SKIP_DIRS)
+                )
+
+            for kdir in probe_dirs:
                 try:
                     probe_rendered = kustomize_build(kdir)
                 except RuntimeError:
@@ -324,6 +345,9 @@ def run(repo_root: str, manifest_env_vars: set[str] | None = None,
         else None
     )
 
+    repo_config = load_repo_config(root)
+    kustomize_overlay_dirs = repo_config.get("kustomize_overlays") or None
+
     overlays = discover_overlays(root)
     if not overlays and not manifest_source:
         return result
@@ -336,12 +360,12 @@ def run(repo_root: str, manifest_env_vars: set[str] | None = None,
         ))
         return result
 
-    ignored_keys = load_ignore_file(root)
+    ignored_keys = load_ignore_keys(repo_config)
     if ignored_keys:
         result.findings.append(Finding(
             severity="info", file="", line=0, image="",
             message=f"{len(ignored_keys)} params.env key(s) excluded via "
-                    f".verify-params-env-ignore: {', '.join(sorted(ignored_keys))}",
+                    f"config: {', '.join(sorted(ignored_keys))}",
         ))
 
     all_repo_params: dict[str, str] = {}
@@ -358,6 +382,7 @@ def run(repo_root: str, manifest_env_vars: set[str] | None = None,
                 source_dir, root, ignored_keys, result,
                 all_repo_params, all_manifest_related_vars,
                 env_mappings_set,
+                overlay_dirs=kustomize_overlay_dirs,
             )
     else:
         total_overlays = _process_discover_overlays(

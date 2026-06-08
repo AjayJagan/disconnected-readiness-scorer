@@ -9,27 +9,21 @@ from rules.python_imports import (
 
 
 class TestLoadKnownMirrors:
-    def test_nonexistent_file(self, tmp_path):
-        result = load_known_mirrors(tmp_path / "missing.yaml")
-        assert result == set()
+    def test_empty_config(self):
+        assert load_known_mirrors({}) == set()
 
-    def test_valid_yaml(self, tmp_path):
-        f = tmp_path / "mirrors.yaml"
-        f.write_text("bundled_packages:\n  - my-custom-pkg\n  - another-pkg\n")
-        result = load_known_mirrors(f)
+    def test_valid_config(self):
+        config = {"known_mirrors": {"bundled_packages": ["my-custom-pkg", "another-pkg"]}}
+        result = load_known_mirrors(config)
         assert result == {"my-custom-pkg", "another-pkg"}
 
-    def test_malformed_yaml(self, tmp_path):
-        f = tmp_path / "bad.yaml"
-        f.write_text("::not valid yaml[[")
-        result = load_known_mirrors(f)
-        assert result == set()
+    def test_no_known_mirrors_key(self):
+        config = {"kustomize_overlays": ["config/overlays/odh"]}
+        assert load_known_mirrors(config) == set()
 
-    def test_missing_key(self, tmp_path):
-        f = tmp_path / "mirrors.yaml"
-        f.write_text("other_key: value\n")
-        result = load_known_mirrors(f)
-        assert result == set()
+    def test_no_bundled_packages(self):
+        config = {"known_mirrors": {"pypi_mirrors": ["https://pypi.example.com"]}}
+        assert load_known_mirrors(config) == set()
 
 
 class TestCheckRequirementsFile:
@@ -210,8 +204,12 @@ class TestRun:
     def test_known_mirrors_config_loaded(self, tmp_path):
         config_dir = tmp_path / ".disconnected-readiness"
         config_dir.mkdir()
-        config = config_dir / "known_mirrors.yaml"
-        config.write_text("bundled_packages:\n  - my-custom-pkg\n")
+        config = config_dir / "config.yaml"
+        config.write_text(
+            "known_mirrors:\n"
+            "  bundled_packages:\n"
+            "    - my-custom-pkg\n"
+        )
         req = tmp_path / "requirements.txt"
         req.write_text("my-custom-pkg==1.0\n")
         result = run(str(tmp_path))

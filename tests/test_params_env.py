@@ -1,5 +1,6 @@
 """Tests for params_env pattern detection and validation."""
 
+from pathlib import Path
 from unittest.mock import patch
 
 from rules.common import ProductionScope
@@ -8,7 +9,7 @@ from rules.params_env_utils import (
     parse_params_env,
     _looks_like_image,
     discover_overlays,
-    load_ignore_file,
+    load_ignore_keys,
     find_go_related_image_envs,
 )
 
@@ -87,26 +88,28 @@ class TestDiscoverOverlays:
         assert discover_overlays(tmp_path) == []
 
 
-# --- load_ignore_file ---
+# --- load_ignore_keys ---
 
-class TestLoadIgnoreFile:
-    def test_loads_keys(self, tmp_path):
-        (tmp_path / ".verify-params-env-ignore").write_text(
-            "exceptions:\n"
-            "  - key: odh-model-controller\n"
-            "    reason: managed by operator\n"
-        )
-        keys = load_ignore_file(tmp_path)
+class TestLoadIgnoreKeys:
+    def test_loads_keys(self):
+        config = {
+            "params_env_ignore": [
+                {"key": "odh-model-controller", "reason": "managed by operator"},
+            ]
+        }
+        keys = load_ignore_keys(config)
         assert keys == {"odh-model-controller"}
 
-    def test_missing_file(self, tmp_path):
-        assert load_ignore_file(tmp_path) == set()
+    def test_empty_config(self):
+        assert load_ignore_keys({}) == set()
 
-    def test_missing_reason_warns(self, tmp_path, capsys):
-        (tmp_path / ".verify-params-env-ignore").write_text(
-            "exceptions:\n  - key: no-reason\n"
-        )
-        keys = load_ignore_file(tmp_path)
+    def test_missing_reason_warns(self, capsys):
+        config = {
+            "params_env_ignore": [
+                {"key": "no-reason"},
+            ]
+        }
+        keys = load_ignore_keys(config)
         assert keys == set()
         assert "missing 'reason'" in capsys.readouterr().err
 
@@ -225,8 +228,10 @@ class TestCheckParamsEnvPattern:
 
     def test_ignore_file_excludes_key(self, tmp_path):
         self._make_overlay(tmp_path, "IGNORED=quay.io/org/img:v1.0\n")
-        (tmp_path / ".verify-params-env-ignore").write_text(
-            "exceptions:\n  - key: IGNORED\n    reason: managed externally\n"
+        config_dir = tmp_path / ".disconnected-readiness"
+        config_dir.mkdir()
+        (config_dir / "config.yaml").write_text(
+            "params_env_ignore:\n  - key: IGNORED\n    reason: managed externally\n"
         )
         with patch("rules.params_env.kustomize_available", return_value=True), \
              patch("rules.params_env.kustomize_build", return_value="---\n"):
@@ -364,3 +369,126 @@ class TestManifestSourceFlow:
             result = run(str(tmp_path))
         assert result.rule == "params-env-wiring"
         assert any("params.env pattern" in f.message for f in result.findings)
+class TestKustomizeOverlayConfig:
+    def _make_repo_with_base_and_overlays(self, tmp_path):
+        """Create a repo with base dirs (placeholder images) and overlays (wired)."""
+        config_dir = tmp_path / "manifests"
+
+        base = config_dir / "manager"
+        base.mkdir(parents=True)
+        (base / "kustomization.yaml").write_text("resources: []\n")
+
+        overlay_odh = config_dir / "overlays" / "odh"
+        overlay_odh.mkdir(parents=True)
+        (overlay_odh / "params.env").write_text(
+            "IMG=quay.io/org/img@sha256:" + "a" * 64 + "\n"
+        )
+        (overlay_odh / "kustomization.yaml").write_text(
+            "resources:\n- ../../manager\n"
+        )
+
+        overlay_rhoai = config_dir / "overlays" / "rhoai"
+        overlay_rhoai.mkdir(parents=True)
+        (overlay_rhoai / "params.env").write_text(
+            "IMG=quay.io/org/img@sha256:" + "b" * 64 + "\n"
+        )
+        (overlay_rhoai / "kustomization.yaml").write_text(
+            "resources:\n- ../../manager\n"
+        )
+        return config_dir
+
+    def test_overlay_config_filters_probe_dirs(self, tmp_path):
+        """With kustomize_overlays config, only listed dirs are probed."""
+        self._make_repo_with_base_and_overlays(tmp_path)
+
+        cfg_dir = tmp_path / ".disconnected-readiness"
+        cfg_dir.mkdir()
+        (cfg_dir / "config.yaml").write_text(
+            "kustomize_overlays:\n"
+            "  - manifests/overlays/odh\n"
+        )
+
+        hardcoded = (
+            "---\nkind: Deployment\nmetadata:\n  name: app\n"
+            "spec:\n  image: registry.io/hardcoded:v1\n"
+        )
+        scope = ProductionScope(
+            production_files=set(), method="test",
+            manifest_source="manifests",
+        )
+
+        build_calls = []
+
+        def tracking_build(kdir):
+            build_calls.append(str(kdir))
+            return hardcoded
+
+        with patch("rules.params_env.kustomize_available", return_value=True), \
+             patch("rules.params_env.kustomize_build", side_effect=tracking_build):
+            result = run(str(tmp_path), production_scope=scope)
+
+        # Probe calls use a temp copy (path contains "verify-params-env-")
+        probe_dirs = [Path(p).name for p in build_calls
+                      if "verify-params-env-" in p]
+        assert "odh" in probe_dirs
+        assert "manager" not in probe_dirs
+        assert "rhoai" not in probe_dirs
+
+    def test_no_config_scans_all_dirs(self, tmp_path):
+        """Without config, all kustomization dirs are probed (existing behavior)."""
+        self._make_repo_with_base_and_overlays(tmp_path)
+
+        hardcoded = (
+            "---\nkind: Deployment\nmetadata:\n  name: app\n"
+            "spec:\n  image: registry.io/hardcoded:v1\n"
+        )
+        scope = ProductionScope(
+            production_files=set(), method="test",
+            manifest_source="manifests",
+        )
+
+        build_calls = []
+
+        def tracking_build(kdir):
+            build_calls.append(str(kdir))
+            return hardcoded
+
+        with patch("rules.params_env.kustomize_available", return_value=True), \
+             patch("rules.params_env.kustomize_build", side_effect=tracking_build):
+            result = run(str(tmp_path), production_scope=scope)
+
+        built_dirs = [Path(p).name for p in build_calls]
+        assert "manager" in built_dirs
+        assert "odh" in built_dirs
+
+    def test_nonexistent_overlay_in_config_skipped(self, tmp_path):
+        """Overlay dirs in config that don't exist are skipped gracefully."""
+        self._make_repo_with_base_and_overlays(tmp_path)
+
+        cfg_dir = tmp_path / ".disconnected-readiness"
+        cfg_dir.mkdir()
+        (cfg_dir / "config.yaml").write_text(
+            "kustomize_overlays:\n"
+            "  - manifests/overlays/nonexistent\n"
+        )
+
+        scope = ProductionScope(
+            production_files=set(), method="test",
+            manifest_source="manifests",
+        )
+
+        build_calls = []
+
+        def tracking_build(kdir):
+            build_calls.append(str(kdir))
+            return "---\n"
+
+        with patch("rules.params_env.kustomize_available", return_value=True), \
+             patch("rules.params_env.kustomize_build", side_effect=tracking_build):
+            result = run(str(tmp_path), production_scope=scope)
+
+        # Probe loop should not have built the nonexistent dir.
+        # Wiring loop still runs on dirs with params.env (odh, rhoai) — that's expected.
+        built_dirs = [Path(p).name for p in build_calls]
+        assert "nonexistent" not in built_dirs
+        assert "manager" not in built_dirs

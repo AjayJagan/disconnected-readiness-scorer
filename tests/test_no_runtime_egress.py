@@ -232,3 +232,28 @@ class TestRun:
         result = run(str(tmp_path))
         assert result.passed is True
         assert result.findings[0].severity == "info"
+    def test_hf_download_in_shell_detected(self, tmp_path):
+        f = tmp_path / "setup.sh"
+        f.write_text("hf download ibm-granite/granite-embedding-125m-english")
+        result = run(str(tmp_path))
+        assert result.passed is False
+        assert len(result.findings) == 1
+        assert "HuggingFace" in result.findings[0].message
+
+    def test_huggingface_cli_download_in_shell_detected(self, tmp_path):
+        f = tmp_path / "setup.sh"
+        f.write_text("huggingface-cli download google/flan-t5-small")
+        result = run(str(tmp_path))
+        assert result.passed is False
+        assert len(result.findings) == 1
+        assert result.findings[0].severity == "blocker"
+        assert "HuggingFace" in result.findings[0].message
+
+    def test_hf_download_subprocess_in_python_detected(self, tmp_path):
+        f = tmp_path / "build.py"
+        f.write_text('subprocess.run(["hf", "download", "model-name"])')
+        result = run(str(tmp_path))
+        assert result.passed is False
+        assert len(result.findings) == 1
+        assert result.findings[0].severity == "blocker"
+        assert "HuggingFace" in result.findings[0].message

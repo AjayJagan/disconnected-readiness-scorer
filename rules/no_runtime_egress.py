@@ -17,29 +17,31 @@ except ModuleNotFoundError:
 
 EGRESS_PATTERNS = {
     ".go": [
-        (re.compile(r'http\.(Get|Post|Head|Do|NewRequest)\s*\('), "http.{method} call"),
-        (re.compile(r'net\.Dial\s*\('), "net.Dial call"),
-        (re.compile(r'http\.DefaultClient'), "http.DefaultClient usage"),
+        (re.compile(r'http\.(Get|Post|Head|Do|NewRequest)\s*\('), "http.{method} call", False),
+        (re.compile(r'net\.Dial\s*\('), "net.Dial call", False),
+        (re.compile(r'http\.DefaultClient'), "http.DefaultClient usage", False),
     ],
     ".py": [
-        (re.compile(r'requests\.(get|post|put|delete|head|patch)\s*\('), "requests.{method} call"),
-        (re.compile(r'urllib\.request\.(urlopen|Request)\s*\('), "urllib.request call"),
-        (re.compile(r'httpx\.(get|post|put|delete|AsyncClient)\s*\('), "httpx call"),
-        (re.compile(r'aiohttp\.ClientSession\s*\('), "aiohttp session"),
-        (re.compile(r'subprocess.*(?:curl|wget)'), "curl/wget via subprocess"),
+        (re.compile(r'requests\.(get|post|put|delete|head|patch)\s*\('), "requests.{method} call", False),
+        (re.compile(r'urllib\.request\.(urlopen|Request)\s*\('), "urllib.request call", False),
+        (re.compile(r'httpx\.(get|post|put|delete|AsyncClient)\s*\('), "httpx call", False),
+        (re.compile(r'aiohttp\.ClientSession\s*\('), "aiohttp session", False),
+        (re.compile(r'subprocess.*(?:curl|wget)'), "curl/wget via subprocess", False),
+        (re.compile(r'subprocess.*(?:hf|huggingface.cli).*download'), "HuggingFace download via subprocess", True),
     ],
     ".ts": [
-        (re.compile(r'fetch\s*\('), "fetch() call"),
-        (re.compile(r'axios\.(get|post|put|delete|request)\s*\('), "axios.{method} call"),
-        (re.compile(r'http\.request\s*\('), "http.request call"),
+        (re.compile(r'fetch\s*\('), "fetch() call", False),
+        (re.compile(r'axios\.(get|post|put|delete|request)\s*\('), "axios.{method} call", False),
+        (re.compile(r'http\.request\s*\('), "http.request call", False),
     ],
     ".tsx": [
-        (re.compile(r'fetch\s*\('), "fetch() call"),
-        (re.compile(r'axios\.(get|post|put|delete|request)\s*\('), "axios.{method} call"),
+        (re.compile(r'fetch\s*\('), "fetch() call", False),
+        (re.compile(r'axios\.(get|post|put|delete|request)\s*\('), "axios.{method} call", False),
     ],
     ".sh": [
-        (re.compile(r'\bcurl\s+'), "curl invocation"),
-        (re.compile(r'\bwget\s+'), "wget invocation"),
+        (re.compile(r'\bcurl\s+'), "curl invocation", False),
+        (re.compile(r'\bwget\s+'), "wget invocation", False),
+        (re.compile(r'\b(?:hf|huggingface-cli)\s+download\b'), "HuggingFace model download", True),
     ],
 }
 
@@ -86,33 +88,37 @@ def run(repo_root: str, production_scope=None) -> RuleResult:
             if stripped.startswith("//") or stripped.startswith("#"):
                 continue
 
-            for pattern, desc in patterns:
+            for pattern, desc, always_network in patterns:
                 match = pattern.search(line)
                 if not match:
                     continue
 
-                configurable = has_configurable_url(line)
-                hardcoded_url = bool(re.search(r'https?://', line))
-
-                internal_url = hardcoded_url and any(
-                    p in line for p in INTERNAL_URL_PATTERNS
-                )
-
-                if hardcoded_url and not configurable and not internal_url:
+                if always_network:
                     severity = "blocker"
-                    msg = f"{desc} with hardcoded external URL — will fail disconnected."
-                elif internal_url:
-                    severity = "info"
-                    msg = f"{desc} — cluster-internal URL, reachable in disconnected environments."
-                elif configurable:
-                    severity = "info"
-                    msg = f"{desc} — URL appears configurable. Verify mirror support."
-                elif not hardcoded_url:
-                    severity = "info"
-                    msg = f"{desc} — no hardcoded URL, likely internal/relative API call."
+                    msg = f"{desc} — requires network access, will fail disconnected."
                 else:
-                    severity = "blocker"
-                    msg = f"{desc} — endpoint may not be reachable in disconnected environments."
+                    configurable = has_configurable_url(line)
+                    hardcoded_url = bool(re.search(r'https?://', line))
+
+                    internal_url = hardcoded_url and any(
+                        p in line for p in INTERNAL_URL_PATTERNS
+                    )
+
+                    if hardcoded_url and not configurable and not internal_url:
+                        severity = "blocker"
+                        msg = f"{desc} with hardcoded external URL — will fail disconnected."
+                    elif internal_url:
+                        severity = "info"
+                        msg = f"{desc} — cluster-internal URL, reachable in disconnected environments."
+                    elif configurable:
+                        severity = "info"
+                        msg = f"{desc} — URL appears configurable. Verify mirror support."
+                    elif not hardcoded_url:
+                        severity = "info"
+                        msg = f"{desc} — no hardcoded URL, likely internal/relative API call."
+                    else:
+                        severity = "blocker"
+                        msg = f"{desc} — endpoint may not be reachable in disconnected environments."
 
                 if in_prod is False and severity in ("blocker", "warning"):
                     severity = "info"

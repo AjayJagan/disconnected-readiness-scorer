@@ -233,3 +233,130 @@ class TestProductionScope:
         scope = ProductionScope(production_files=set(), method="go-import-graph")
         result = run(str(tmp_path), production_scope=scope)
         assert result.findings[0].severity == "blocker"
+class TestOciUri:
+    def test_oci_uri_without_digest_is_blocker(self, tmp_path):
+        f = tmp_path / "constants.py"
+        f.write_text('storage_uri="oci://quay.io/org/model-name"')
+        findings = scan_file(f, tmp_path)
+        assert len(findings) == 1
+        assert findings[0].severity == "blocker"
+        assert findings[0].image == "oci://quay.io/org/model-name"
+        assert "no digest pin" in findings[0].message
+
+    def test_oci_uri_with_digest_skipped(self, tmp_path):
+        f = tmp_path / "constants.py"
+        f.write_text('uri="oci://quay.io/org/model@sha256:abcdef1234567890"')
+        findings = scan_file(f, tmp_path)
+        assert findings == []
+
+    def test_oci_uri_deep_path(self, tmp_path):
+        f = tmp_path / "conftest.py"
+        f.write_text('uri="oci://quay.io/trustyai/detectors/granite-guardian-hap"')
+        findings = scan_file(f, tmp_path)
+        assert len(findings) == 1
+        assert "oci://quay.io/trustyai/detectors/granite-guardian-hap" in findings[0].image
+
+    def test_oci_uri_with_tag_is_blocker(self, tmp_path):
+        f = tmp_path / "deploy.yaml"
+        f.write_text('storage_uri: oci://registry.example.com/org/model:v1.0')
+        findings = scan_file(f, tmp_path)
+        assert len(findings) == 1
+        assert findings[0].severity == "blocker"
+        assert "tag" in findings[0].message
+
+    def test_oci_uri_in_params_env_is_info(self, tmp_path):
+        f = tmp_path / "params.env"
+        f.write_text('MODEL=oci://quay.io/org/model-name')
+        findings = scan_file(f, tmp_path)
+        assert len(findings) == 1
+        assert findings[0].severity == "info"
+
+    def test_oci_uri_out_of_production_scope_downgraded(self, tmp_path):
+        f = tmp_path / "test_utils.go"
+        f.write_text('uri := "oci://quay.io/org/test-model"')
+        other = tmp_path / "main.go"
+        other.write_text("package main\n")
+        scope = ProductionScope(
+            production_files={other.resolve()}, method="go-import-graph",
+        )
+        result = run(str(tmp_path), production_scope=scope)
+        oci_findings = [f for f in result.findings if "oci://" in f.image]
+        assert len(oci_findings) == 1
+        assert oci_findings[0].severity == "info"
+
+    def test_plain_path_not_matched(self, tmp_path):
+        f = tmp_path / "main.go"
+        f.write_text('path := "cmd/manager/main.go"')
+        findings = scan_file(f, tmp_path)
+        assert findings == []
+
+    def test_oci_uri_sets_passed_false(self, tmp_path):
+        f = tmp_path / "deploy.yaml"
+        f.write_text('storage_uri: oci://quay.io/org/model-name')
+        result = run(str(tmp_path))
+        assert result.passed is False
+
+
+class TestK8sUnqualifiedImage:
+    def test_unqualified_image_in_yaml_is_blocker(self, tmp_path):
+        f = tmp_path / "job.yaml"
+        f.write_text("      containers:\n      - name: migrate\n        image: origin-cli:latest")
+        findings = scan_file(f, tmp_path)
+        assert len(findings) == 1
+        assert findings[0].severity == "blocker"
+        assert findings[0].image == "origin-cli:latest"
+        assert "Unqualified image" in findings[0].message
+
+    def test_unqualified_nginx_tag_in_yaml(self, tmp_path):
+        f = tmp_path / "deploy.yaml"
+        f.write_text("spec:\n  containers:\n  - image: nginx:1.25")
+        findings = scan_file(f, tmp_path)
+        assert len(findings) == 1
+        assert findings[0].severity == "blocker"
+        assert findings[0].image == "nginx:1.25"
+
+    def test_unqualified_image_double_quoted(self, tmp_path):
+        f = tmp_path / "deploy.yaml"
+        f.write_text('        image: "origin-cli:latest"')
+        findings = scan_file(f, tmp_path)
+        assert len(findings) == 1
+        assert findings[0].image == "origin-cli:latest"
+
+    def test_unqualified_image_single_quoted(self, tmp_path):
+        f = tmp_path / "deploy.yaml"
+        f.write_text("        image: 'nginx:1.25'")
+        findings = scan_file(f, tmp_path)
+        assert len(findings) == 1
+        assert findings[0].image == "nginx:1.25"
+
+    def test_unqualified_image_not_matched_in_go(self, tmp_path):
+        f = tmp_path / "main.go"
+        f.write_text('image: origin-cli:latest')
+        findings = scan_file(f, tmp_path)
+        assert findings == []
+
+    def test_qualified_image_no_duplicate(self, tmp_path):
+        f = tmp_path / "deploy.yaml"
+        f.write_text("        image: quay.io/org/img:v1")
+        findings = scan_file(f, tmp_path)
+        assert len(findings) == 1
+        assert "Unqualified" not in findings[0].message
+
+    def test_unqualified_without_image_prefix_not_matched(self, tmp_path):
+        f = tmp_path / "deploy.yaml"
+        f.write_text("name: origin-cli:latest")
+        findings = scan_file(f, tmp_path)
+        assert findings == []
+
+    def test_unqualified_in_params_env_is_info(self, tmp_path):
+        f = tmp_path / "params.env"
+        f.write_text("image: origin-cli:latest")
+        findings = scan_file(f, tmp_path)
+        assert len(findings) == 1
+        assert findings[0].severity == "info"
+
+    def test_unqualified_sets_passed_false(self, tmp_path):
+        f = tmp_path / "job.yaml"
+        f.write_text("        image: origin-cli:latest")
+        result = run(str(tmp_path))
+        assert result.passed is False

@@ -34,7 +34,7 @@ python3 main.py /path/to/target/repo                        # all default rules
 python3 main.py /path/to/target/repo --rules csv,tags        # subset of rules
 python3 main.py /path/to/target/repo --report json           # JSON output
 python3 main.py /path/to/target/repo --operator-path /tmp/opendatahub-operator  # pre-cloned operator
-python3 main.py /path/to/target/repo --exceptions /path/to/exceptions.yaml      # custom exceptions
+python3 main.py /path/to/target/repo --config /path/to/config.yaml              # custom central config
 ```
 
 Exit code is `0` for READY, `1` for NOT READY.
@@ -104,9 +104,9 @@ When `manifest_source` is available (from operator manifest mapping), uses the o
 | Orphan Go `os.Getenv` call with no matching rendered manifest var | blocker |
 | `RELATED_IMAGE_*` var mapped from params.env not in operator manifest | blocker |
 | Unwired params.env key (defined but not consumed by kustomize) | info |
-| Key listed in `.verify-params-env-ignore` | skipped |
+| Key listed in `params_env_ignore` config | skipped |
 
-Supports `.verify-params-env-ignore` for excluding keys. When the orchestrator provides operator manifest vars, cross-references mapped `RELATED_IMAGE_*` vars against the manifest.
+Supports `params_env_ignore` config for excluding keys. When the orchestrator provides operator manifest vars, cross-references mapped `RELATED_IMAGE_*` vars against the manifest.
 
 ### no-image-tags (alias: `tags`)
 
@@ -114,14 +114,22 @@ Enforces `@sha256:` digest refs; rejects mutable tags (`:latest`, `:v1.2.3`). Ta
 
 **Files scanned:** `.go`, `.py`, `.yaml`, `.yml`, `.json`, `.toml`, `Dockerfile`, `Containerfile` (git-tracked only). Directories managed by `params.env` + kustomize are skipped entirely.
 
+**Detects three image reference patterns:**
+
+- **Qualified images** (`registry.io/org/name:tag`) — standard container image references with mutable tags
+- **OCI URIs** (`oci://registry.io/org/name`) — flags `oci://` URIs without `@sha256:` digest pin, including those with no tag at all
+- **Unqualified k8s images** (`image: nginx:latest`) — detects images without registry prefix in YAML `image:` fields (e.g. `origin-cli:latest` in a k8s Job manifest)
+
 **Severity logic:**
 
 | Condition | Severity |
 |-----------|----------|
 | Tagged image in any scanned file | blocker |
+| `oci://` URI without `@sha256:` digest | blocker |
+| Unqualified image in YAML `image:` field | blocker |
 | Image uses `@sha256:` digest | pass (not reported) |
 
-HTTP/HTTPS URLs are excluded from image detection. `params.env` files are excluded.
+HTTP/HTTPS URLs are excluded from image detection. `params.env` files produce info-level findings.
 
 ### no-runtime-egress (alias: `egress`)
 
@@ -129,13 +137,14 @@ Detects outbound HTTP calls in runtime code that would fail in disconnected envi
 
 **Files scanned:** `.go`, `.py`, `.ts`, `.tsx`, `.sh` (git-tracked only). Comments (`//`, `#`) are skipped.
 
-**Patterns detected:** `http.Get/Post/Do`, `requests.get`, `fetch()`, `axios`, `curl`, `wget`, `net.Dial`, and more.
+**Patterns detected:** `http.Get/Post/Do`, `requests.get`, `fetch()`, `axios`, `curl`, `wget`, `net.Dial`, `hf download`, `huggingface-cli download`, and more.
 
 **Severity logic:**
 
 | Condition | Severity |
 |-----------|----------|
 | Hardcoded external URL (`https://api.example.com`) | blocker |
+| HuggingFace model download (`hf download`, `huggingface-cli download`) | blocker |
 | Cluster-internal URL (`kubernetes.default.svc`, `*.svc.cluster.local`, `localhost`) | info |
 | Configurable URL (via env var, config, `viper`, etc.) | info |
 | Network call with no hardcoded URL (relative/variable) | info |
@@ -180,7 +189,7 @@ Severity levels for individual findings:
 
 ## Exception System
 
-All policy-based exclusions (test dirs, CI dirs, build files, etc.) are configured in `config/exceptions.yaml` rather than hardcoded in rules. Exceptions downgrade matching blocker findings to **info** severity.
+All policy-based exclusions (test dirs, CI dirs, build files, etc.) are configured in `config/config.yaml` rather than hardcoded in rules. Exceptions downgrade matching blocker findings to **info** severity.
 
 ### Exception fields
 
@@ -198,7 +207,7 @@ Path patterns support `**/` prefix to match at any depth (e.g. `**/Dockerfile` m
 
 ### Default exceptions
 
-The default `config/exceptions.yaml` includes:
+The default `config/config.yaml` exceptions include:
 
 - **Test directories:** `test/`, `tests/`, `testdata/`, `testing/`, `e2e/`, `mocks/`, `contract-tests/`, `hack/`
 - **Test file suffixes:** `*_test.go`, `test_*.py`, `*.test.ts`, `*.spec.ts`
@@ -210,7 +219,7 @@ The default `config/exceptions.yaml` includes:
 
 ### Custom exceptions
 
-Override with `--exceptions /path/to/file.yaml`:
+Override with `--config /path/to/config.yaml`:
 
 ```yaml
 exceptions:
@@ -231,35 +240,64 @@ The following directories are always fully skipped (no findings at all): `.git`,
 
 ## Configuration
 
-### `config/known_mirrors.yaml`
+All configuration is in YAML files with JSON Schema support for IDE autocomplete. Add `# yaml-language-server: $schema=<url>` at the top of your config file.
 
-Approved internal registries and PyPI mirrors. Rules treat pulls from these as safe.
+### Central config (`config/config.yaml`)
+
+Single unified config in the scorer repo. Contains registries, known mirrors, and exception rules that apply to all scanned repos.
 
 ```yaml
+# yaml-language-server: $schema=../schemas/config.schema.json
+
 registries:
   - registry.redhat.io
-  - brew.registry.redhat.io
   - quay.io/opendatahub
-  - quay.io/modh
 
-pypi_mirrors:
-  - https://pypi.corp.redhat.com/simple/
+known_mirrors:
+  bundled_packages:
+    - codeflare-sdk
+  pypi_mirrors:
+    - https://pypi.corp.redhat.com/simple/
+
+exceptions:
+  - rule: "*"
+    paths:
+      - "test/**"
+      - "tests/**"
+    reason: "Test directory — not deployed in production"
 ```
 
-### `.verify-params-env-ignore`
+### Per-repo config (`.disconnected-readiness/config.yaml`)
 
-Opt-out file for the `params_env` rule. Place it in the target repo root to exclude specific `params.env` keys from validation. Keys listed here skip probe checks and wiring validation.
+Single unified config in the target repo. All sections are optional.
 
 ```yaml
-- key: odh_notebook_controller_image
-  reason: "Managed externally by the operator, not needed in params.env wiring"
+# yaml-language-server: $schema=https://raw.githubusercontent.com/opendatahub-io/disconnected-readiness-scorer/main/schemas/config.schema.json
 
-- key: odh_trustyai_service_image
-  reason: "Component deprecated, will be removed in next release"
-  reference: "https://issues.redhat.com/browse/RHOAIENG-12345"
+kustomize_overlays:
+  - config/overlays/odh
+  - config/overlays/rhoai
+
+known_mirrors:
+  bundled_packages:
+    - my-internal-package
+
+exceptions:
+  - rule: no-runtime-egress
+    path: "internal/client.go"
+    reason: "Calls cluster-internal Kubernetes API"
+
+params_env_ignore:
+  - key: odh_notebook_controller_image
+    reason: "Managed externally by the operator"
 ```
 
-Each entry requires `key` and `reason`. The optional `reference` field can link to a tracking issue.
+| Section | Description |
+|---------|-------------|
+| `kustomize_overlays` | Kustomize overlay dirs to validate. When set, only these dirs are built. |
+| `known_mirrors` | Per-repo additions to known-safe packages/mirrors. |
+| `exceptions` | Per-repo exception rules. Same format as central, but `repo` field forbidden. At least one scope filter required. |
+| `params_env_ignore` | params.env keys to exclude from validation. Each entry needs `key` and `reason`. |
 
 ## Reporting False Positives
 
@@ -267,7 +305,7 @@ When the scanner flags something that is not a real disconnected issue, add an e
 
 ### Add a per-repo exception
 
-Create `.disconnected-readiness/exceptions.yaml` in your repository (or add to an existing one). Each exception requires a scope filter so it only applies to specific findings — you cannot disable an entire rule.
+Add an `exceptions` section to `.disconnected-readiness/config.yaml` in your repository (or create the file). Each exception requires a scope filter so it only applies to specific findings — you cannot disable an entire rule.
 
 | Field       | Required | Description                                                                 |
 |-------------|----------|-----------------------------------------------------------------------------|
@@ -406,6 +444,25 @@ Or using the Claude Code skill from the component repo root:
 /disconnected-score
 ```
 
+## Jira Issue Validation
+
+`verify_jira_issues.py` validates the scanner against known real-world Jira disconnected bugs. It clones each repo at the commit where the bug exists, runs the scorer, and outputs JSON with all findings.
+
+```bash
+python3 verify_jira_issues.py                  # JSON to stdout
+python3 verify_jira_issues.py | python3 -c "
+import json, sys
+for r in json.load(sys.stdin):
+    print(f'{r[\"status\"]:5s} {r[\"jira\"]}: {r[\"summary\"]}')"
+```
+
+Each entry in `JIRA_ISSUES` specifies:
+
+- `repo_url` / `ref` / `checkout` — the repo and commit to test against
+- The script runs all rules and outputs the complete report per issue
+
+Current coverage: 7/10 issues detected, 3 gaps identified (params.env exclusion by design, URL string literals, container runtime downloads).
+
 ## Development
 
 ### Dependencies
@@ -414,7 +471,7 @@ Or using the Claude Code skill from the component repo root:
 pip install pytest pytest-cov pyyaml jinja2
 ```
 
-`pyyaml` and `jinja2` are optional at runtime (rules degrade gracefully) but required for full test coverage.
+`pyyaml` is required. `jinja2` is optional at runtime (report rendering degrades gracefully) but required for full test coverage.
 
 ### Running tests
 

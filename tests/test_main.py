@@ -15,7 +15,7 @@ from main import (
     adapt_manifest_result,
     apply_exceptions,
     compute_score,
-    load_exceptions,
+    load_central_config,
     parse_args,
     print_summary,
     render_json,
@@ -25,6 +25,11 @@ from main import (
     main,
 )
 from rules.common import Finding, RuleResult
+
+
+def load_exceptions(path):
+    """Test helper: load exceptions list from a config file."""
+    return load_central_config(path)["exceptions"]
 
 
 # --- parse_args ---
@@ -410,7 +415,7 @@ class TestLoadExceptions:
     def test_non_mapping_root_raises(self, tmp_path):
         exc_file = tmp_path / "exceptions.yaml"
         exc_file.write_text("- rule: no-image-tags\n  reason: test\n")
-        with pytest.raises(ValueError, match="must be a mapping"):
+        with pytest.raises(ValueError, match="must be a YAML mapping"):
             load_exceptions(str(exc_file))
 
     def test_missing_reason_raises(self, tmp_path):
@@ -451,16 +456,6 @@ class TestLoadExceptions:
         with pytest.raises(ValueError, match="Cannot read"):
             load_exceptions(str(exc_dir))
 
-    def test_typo_in_key_raises(self, tmp_path):
-        exc_file = tmp_path / "exceptions.yaml"
-        exc_file.write_text(
-            "exception:\n"
-            "  - rule: no-image-tags\n"
-            '    reason: "test"\n'
-        )
-        with pytest.raises(ValueError, match="does not contain an 'exceptions' key"):
-            load_exceptions(str(exc_file))
-
     def test_fallback_parser_handles_simple_format(self, tmp_path):
         exc_file = tmp_path / "exceptions.yaml"
         exc_file.write_text(
@@ -474,20 +469,6 @@ class TestLoadExceptions:
         assert result[0]["rule"] == "no-image-tags, no-runtime-egress"
         assert result[0]["path"] == "install/*"
 
-    def test_fallback_parser_reordered_keys(self, tmp_path):
-        exc_file = tmp_path / "exceptions.yaml"
-        exc_file.write_text(
-            "exceptions:\n"
-            '  - path: "install/*"\n'
-            "    rule: no-image-tags\n"
-            '    reason: "historical"\n'
-        )
-        with patch.dict("sys.modules", {"yaml": None}):
-            from main import _parse_exceptions_fallback
-            result = _parse_exceptions_fallback(exc_file.read_text())
-        assert len(result) == 1
-        assert result[0]["rule"] == "no-image-tags"
-        assert result[0]["path"] == "install/*"
 
 
 # --- _get_repo_name ---
@@ -711,12 +692,12 @@ class TestReportSorting:
 class TestParseArgsExceptions:
     def test_exceptions_flag(self, tmp_path):
         exc_path = tmp_path / "exc.yaml"
-        args = parse_args([".", "--exceptions", str(exc_path)])
-        assert args.exceptions == str(exc_path)
+        args = parse_args([".", "--config", str(exc_path)])
+        assert args.config == str(exc_path)
 
     def test_exceptions_default_none(self):
         args = parse_args(["."])
-        assert args.exceptions is None
+        assert args.config is None
 
 
 # --- validate_repo_exceptions ---
@@ -724,10 +705,10 @@ class TestParseArgsExceptions:
 
 
 def _write_repo_exceptions(tmp_path, yaml_content):
-    """Create .disconnected-readiness/exceptions.yaml in tmp_path, return the file path."""
+    """Create .disconnected-readiness/config.yaml with exceptions in tmp_path."""
     exc_dir = tmp_path / ".disconnected-readiness"
     exc_dir.mkdir(exist_ok=True)
-    exc_file = exc_dir / "exceptions.yaml"
+    exc_file = exc_dir / "config.yaml"
     exc_file.write_text(yaml_content)
     return exc_file
 
@@ -900,7 +881,7 @@ class TestExceptionSnippets:
         ]
         section = _build_false_positive_section(snippets)
         assert "2 blocker findings" in section
-        assert ".disconnected-readiness/exceptions.yaml" in section
+        assert ".disconnected-readiness/config.yaml" in section
         assert "#reporting-false-positives" in section
 
     def test_false_positive_section_singular_for_one_blocker(self):
@@ -914,7 +895,7 @@ class TestExceptionSnippets:
         ])]
         output = render_markdown("NOT READY", results, "test-repo")
         assert "Reporting False Positives" in output
-        assert ".disconnected-readiness/exceptions.yaml" in output
+        assert ".disconnected-readiness/config.yaml" in output
 
     def test_markdown_report_omits_section_when_no_blockers(self):
         results = [RuleResult(rule="r", findings=[

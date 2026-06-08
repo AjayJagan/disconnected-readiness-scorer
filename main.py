@@ -15,13 +15,20 @@ import sys
 import tempfile
 import time
 from datetime import date
+from fnmatch import fnmatch
 from pathlib import Path
 
-from rules.common import Finding, RuleResult
+import yaml
+
+from rules.common import (
+    Finding, RuleResult, CONFIG_DIR, CONFIG_FILE,
+    load_repo_config, load_config_file,
+)
 from rules.production_scope import compute_production_scope
 
 SEVERITY_ORDER = {"blocker": 0, "info": 1}
-REPO_EXCEPTIONS_PATH = ".disconnected-readiness/exceptions.yaml"
+CENTRAL_CONFIG_PATH = "config/config.yaml"
+REPO_CONFIG_PATH = f"{CONFIG_DIR}/{CONFIG_FILE}"
 
 RULE_REGISTRY = {
     "csv": {
@@ -56,63 +63,45 @@ RULE_REGISTRY = {
 DEFAULT_RULES = [k for k, v in RULE_REGISTRY.items() if not v.get("is_manifest_rule")]
 
 
-def _parse_exceptions_fallback(text):
-    """Parse exceptions.yaml without PyYAML — handles the simple list-of-dicts format."""
-    exceptions = []
-    current = None
-    for raw_line in text.splitlines():
-        stripped = raw_line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        if stripped == "exceptions: []":
-            return []
-        if stripped == "exceptions:":
-            continue
-        if stripped.startswith("- ") and ":" in stripped[2:]:
-            if current is not None:
-                exceptions.append(current)
-            key, val = stripped[2:].split(":", 1)
-            current = {key.strip(): val.strip().strip('"').strip("'")}
-        elif current is not None and ":" in stripped:
-            key, val = stripped.split(":", 1)
-            current[key.strip()] = val.strip().strip('"').strip("'")
-    if current is not None:
-        exceptions.append(current)
-    return exceptions
-
-
-def load_exceptions(config_path):
-    """Load exception rules from a YAML config file."""
+def _load_yaml_file(config_path):
+    """Load a YAML file, returning parsed dict or None if missing."""
     if not Path(config_path).exists():
-        return []
+        return None
     try:
         text = Path(config_path).read_text()
     except OSError as exc:
         raise ValueError(f"Cannot read {config_path}: {exc}") from exc
     try:
-        import yaml
-        try:
-            raw = yaml.safe_load(text)
-        except yaml.YAMLError as exc:
-            raise ValueError(
-                f"Failed to parse {config_path}: {exc}"
-            ) from exc
-        if raw is None:
-            exceptions = []
-        elif not isinstance(raw, dict):
-            raise ValueError(
-                f"{config_path} must be a mapping with an 'exceptions' key, "
-                f"got {type(raw).__name__}"
-            )
-        else:
-            if raw and "exceptions" not in raw:
-                raise ValueError(
-                    f"{config_path} does not contain an 'exceptions' key. "
-                    f"Found keys: {', '.join(raw.keys())}"
-                )
-            exceptions = raw.get("exceptions") or []
-    except ImportError:
-        exceptions = _parse_exceptions_fallback(text)
+        return yaml.safe_load(text) or {}
+    except yaml.YAMLError as exc:
+        raise ValueError(
+            f"Failed to parse {config_path}: {exc}"
+        ) from exc
+
+
+def load_central_config(config_path):
+    """Load unified central config (config/config.yaml).
+
+    Returns dict with keys: registries, known_mirrors, exceptions.
+    """
+    raw = _load_yaml_file(config_path)
+    if raw is None:
+        return {"registries": [], "known_mirrors": {}, "exceptions": []}
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"{config_path} must be a YAML mapping, got {type(raw).__name__}"
+        )
+    exceptions = raw.get("exceptions") or []
+    _validate_exceptions(exceptions, config_path)
+    return {
+        "registries": raw.get("registries") or [],
+        "known_mirrors": raw.get("known_mirrors") or {},
+        "exceptions": exceptions,
+    }
+
+
+def _validate_exceptions(exceptions, config_path):
+    """Validate exception entries have required fields."""
     for i, exc in enumerate(exceptions):
         if not isinstance(exc, dict):
             raise ValueError(
@@ -129,7 +118,6 @@ def load_exceptions(config_path):
                 f"Exception entry {i + 1} (rule={exc.get('rule', '?')}) "
                 f"in {config_path} is missing required 'reason' field"
             )
-    return exceptions
 
 
 def _path_matches(filepath: str, pattern: str) -> bool:
@@ -139,13 +127,55 @@ def _path_matches(filepath: str, pattern: str) -> bool:
     (fnmatch does not expand ``**`` as a recursive wildcard).
     Also matches against the filename alone for suffix patterns like ``*_test.go``.
     """
-    from fnmatch import fnmatch
     if fnmatch(filepath, pattern):
         return True
     if pattern.startswith("**/"):
         if fnmatch(filepath, pattern[3:]):
             return True
     return fnmatch(filepath.rsplit("/", 1)[-1], pattern)
+
+
+def apply_exceptions(results, exceptions, repo_name):
+    """Downgrade blocker findings that match configured exceptions to info severity."""
+    for result in results:
+        for finding in result.findings:
+            if finding.severity != "blocker":
+                continue
+            for exc in exceptions:
+                exc_rule = exc.get("rule", "")
+                if exc_rule != "*":
+                    exc_rules = [r.strip() for r in exc_rule.split(",")]
+                    if result.rule not in exc_rules:
+                        continue
+                exc_repo = exc.get("repo")
+                if exc_repo:
+                    if "/" in exc_repo:
+                        if exc_repo != repo_name:
+                            continue
+                    else:
+                        if exc_repo != repo_name.rsplit("/", 1)[-1]:
+                            continue
+                exc_paths = exc.get("paths") or []
+                exc_path = exc.get("path")
+                if exc_path:
+                    exc_paths = exc_paths + [exc_path]
+                if exc_paths:
+                    if not any(_path_matches(finding.file, p) for p in exc_paths):
+                        continue
+                exc_image = exc.get("image")
+                if exc_image:
+                    if not fnmatch(finding.image, exc_image):
+                        continue
+                exc_message = exc.get("message")
+                if exc_message:
+                    if not fnmatch(finding.message, exc_message):
+                        continue
+                reason = exc.get("reason", "configured exception")
+                finding.message += f" [Exception: {reason}]"
+                finding.severity = "info"
+                break
+        if not any(f.severity == "blocker" for f in result.findings):
+            result.passed = True
 
 
 def validate_repo_exceptions(exceptions, config_path):
@@ -202,51 +232,6 @@ def validate_repo_exceptions(exceptions, config_path):
             )
 
 
-def apply_exceptions(results, exceptions, repo_name):
-    """Downgrade blocker findings that match configured exceptions to info severity."""
-    for result in results:
-        for finding in result.findings:
-            if finding.severity != "blocker":
-                continue
-            for exc in exceptions:
-                exc_rule = exc.get("rule", "")
-                if exc_rule != "*":
-                    exc_rules = [r.strip() for r in exc_rule.split(",")]
-                    if result.rule not in exc_rules:
-                        continue
-                exc_repo = exc.get("repo")
-                if exc_repo:
-                    if "/" in exc_repo:
-                        if exc_repo != repo_name:
-                            continue
-                    else:
-                        if exc_repo != repo_name.rsplit("/", 1)[-1]:
-                            continue
-                exc_paths = exc.get("paths") or []
-                exc_path = exc.get("path")
-                if exc_path:
-                    exc_paths = exc_paths + [exc_path]
-                if exc_paths:
-                    if not any(_path_matches(finding.file, p) for p in exc_paths):
-                        continue
-                exc_image = exc.get("image")
-                if exc_image:
-                    from fnmatch import fnmatch
-                    if not fnmatch(finding.image, exc_image):
-                        continue
-                exc_message = exc.get("message")
-                if exc_message:
-                    from fnmatch import fnmatch
-                    if not fnmatch(finding.message, exc_message):
-                        continue
-                reason = exc.get("reason", "configured exception")
-                finding.message += f" [Exception: {reason}]"
-                finding.severity = "info"
-                break
-        if not any(f.severity == "blocker" for f in result.findings):
-            result.passed = True
-
-
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description="Score a repo's disconnected / air-gapped readiness.",
@@ -275,8 +260,13 @@ def parse_args(argv=None):
         help="Write the report to a file instead of stdout.",
     )
     parser.add_argument(
-        "--exceptions",
-        help="Path to exceptions.yaml (default: config/exceptions.yaml).",
+        "--config",
+        help=f"Path to central config.yaml (default: {CENTRAL_CONFIG_PATH}).",
+    )
+    parser.add_argument(
+        "--repo-config",
+        help=f"Path to per-repo config.yaml "
+             f"(default: <repo_root>/{REPO_CONFIG_PATH}).",
     )
     parser.add_argument(
         "--no-production-scope", action="store_true",
@@ -286,11 +276,6 @@ def parse_args(argv=None):
     parser.add_argument(
         "--timing", action="store_true",
         help="Print per-step wall time to stderr for performance debugging.",
-    )
-    parser.add_argument(
-        "--repo-exceptions",
-        help="Path to per-repo exceptions.yaml "
-             f"(default: <repo_root>/{REPO_EXCEPTIONS_PATH}).",
     )
     return parser.parse_args(argv)
 
@@ -498,7 +483,7 @@ def _build_false_positive_section(snippets):
         "## Reporting False Positives",
         "",
         f"{count} blocker {noun} above may be false positives.",
-        f"To unblock your PR, add an exception to `{REPO_EXCEPTIONS_PATH}`.",
+        f"To unblock your PR, add an exception to `{REPO_CONFIG_PATH}`.",
         f"See [{readme_url}]({readme_url}) for the format and required fields.",
         "",
     ]
@@ -572,32 +557,28 @@ def _get_repo_name(repo_root):
     return os.path.basename(repo_root)
 
 
-def _load_all_exceptions(args, repo_root):
+def _load_all_exceptions(args, repo_root, repo_config):
     """Load central and per-repo exceptions, validate, and merge.
 
     Returns (merged_exceptions, error_result_or_None).
     """
-    exceptions_path = args.exceptions or str(
-        Path(__file__).parent / "config" / "exceptions.yaml"
+    config_path = args.config or str(
+        Path(__file__).parent / CENTRAL_CONFIG_PATH
     )
-    exceptions = load_exceptions(exceptions_path)
+    central = load_central_config(config_path)
+    exceptions = central["exceptions"]
 
-    repo_exceptions_path = args.repo_exceptions or str(
-        Path(repo_root) / REPO_EXCEPTIONS_PATH
-    )
-    if args.repo_exceptions and not Path(repo_exceptions_path).exists():
-        print(
-            f"  Warning: --repo-exceptions path does not exist: "
-            f"{repo_exceptions_path}",
-            file=sys.stderr,
-        )
+    repo_exceptions = repo_config.get("exceptions") or []
+    if getattr(args, "repo_config", None):
+        repo_config_path = args.repo_config
+    else:
+        repo_config_path = str(Path(repo_root) / REPO_CONFIG_PATH)
     try:
-        repo_exceptions = load_exceptions(repo_exceptions_path)
         if repo_exceptions:
-            validate_repo_exceptions(repo_exceptions, repo_exceptions_path)
+            validate_repo_exceptions(repo_exceptions, repo_config_path)
             print(
                 f"  Loaded {len(repo_exceptions)} per-repo exception(s) "
-                f"from {REPO_EXCEPTIONS_PATH}",
+                f"from {REPO_CONFIG_PATH}",
                 file=sys.stderr,
             )
             exceptions = exceptions + repo_exceptions
@@ -607,10 +588,10 @@ def _load_all_exceptions(args, repo_root):
         )
         error_result.findings.append(Finding(
             severity="blocker",
-            file=repo_exceptions_path,
+            file=repo_config_path,
             line=0,
             image="",
-            message=f"Invalid per-repo exceptions file: {exc}",
+            message=f"Invalid per-repo exceptions: {exc}",
         ))
         return exceptions, error_result
 
@@ -709,7 +690,12 @@ def _run(args, operator_path):
         _tlog(f"rule {key}", time.monotonic() - t0)
         results.append(result)
 
-    exceptions, error_result = _load_all_exceptions(args, repo_root)
+    if getattr(args, "repo_config", None):
+        repo_config = load_config_file(Path(args.repo_config))
+    else:
+        repo_config = load_repo_config(Path(repo_root))
+
+    exceptions, error_result = _load_all_exceptions(args, repo_root, repo_config)
     if error_result:
         results.insert(0, error_result)
     if exceptions:

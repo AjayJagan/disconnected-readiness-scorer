@@ -18,11 +18,14 @@ from typing import Dict, List, Optional, Set, Tuple
 
 PROBE_SENTINEL = "probe.test/verify-params-env:check"
 IMAGE_PLACEHOLDERS = frozenset({"REPLACE_IMAGE"})
-IGNORE_FILE = ".verify-params-env-ignore"
 SKIP_DIRS = {".git", "vendor", "node_modules", "__pycache__"}
 
 _IMAGE_RE = re.compile(
     r"[a-zA-Z0-9._-]+/[a-zA-Z0-9._/-]+(?::[a-zA-Z0-9._-]+|@sha256:[a-f0-9]+)"
+)
+_UNQUALIFIED_IMAGE_RE = re.compile(
+    r"(?:^|\s)image:\s*([a-zA-Z][\w._-]+(?::[a-zA-Z0-9._-]+|@sha256:[a-f0-9]+))",
+    re.MULTILINE,
 )
 _CONFIGMAP_KEY_REF_RE = re.compile(
     r"configMapKeyRef:\s*\n"
@@ -164,37 +167,19 @@ def discover_overlays(repo_root: Path) -> List[Path]:
     return overlays
 
 
-def load_ignore_file(repo_root: Path) -> Set[str]:
-    ignore_path = repo_root / IGNORE_FILE
-    if not ignore_path.exists():
-        return set()
-
+def load_ignore_keys(repo_config: dict) -> Set[str]:
+    """Load params_env_ignore keys from unified repo config dict."""
     keys: Set[str] = set()
-    current: Dict[str, str] = {}
-
-    def _flush():
-        if not current:
-            return
-        if "key" not in current:
-            print(f"  Ignore entry missing 'key': {current}", file=sys.stderr)
-        elif "reason" not in current:
-            print(f"  Ignore entry missing 'reason': {current}", file=sys.stderr)
-        else:
-            keys.add(current["key"])
-
-    for line in ignore_path.read_text().splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or stripped == "exceptions:":
+    entries = repo_config.get("params_env_ignore") or []
+    for i, entry in enumerate(entries):
+        if not isinstance(entry, dict):
             continue
-        if stripped.startswith("- key:"):
-            _flush()
-            current = {"key": stripped.split(":", 1)[1].strip()}
-        elif stripped.startswith("reason:") and current:
-            current["reason"] = stripped.split(":", 1)[1].strip()
-        elif stripped.startswith("reference:") and current:
-            current["reference"] = stripped.split(":", 1)[1].strip()
-
-    _flush()
+        if "key" not in entry:
+            print(f"  params_env_ignore entry {i + 1} missing 'key'", file=sys.stderr)
+        elif "reason" not in entry:
+            print(f"  params_env_ignore entry {i + 1} missing 'reason'", file=sys.stderr)
+        else:
+            keys.add(entry["key"])
     return keys
 
 
@@ -276,6 +261,14 @@ def extract_all_images(rendered: str, exclude_patterns: List[str]) -> Dict[str, 
         resource_id = f"{kind}/{name}" if kind and name else kind or "unknown"
 
         for m in _IMAGE_RE.findall(doc):
+            if m in IMAGE_PLACEHOLDERS:
+                continue
+            if any(fnmatch.fnmatch(m, pat) for pat in exclude_patterns):
+                continue
+            images.setdefault(m, [])
+            if resource_id not in images[m]:
+                images[m].append(resource_id)
+        for m in _UNQUALIFIED_IMAGE_RE.findall(doc):
             if m in IMAGE_PLACEHOLDERS:
                 continue
             if any(fnmatch.fnmatch(m, pat) for pat in exclude_patterns):

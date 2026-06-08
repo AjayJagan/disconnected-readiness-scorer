@@ -29,18 +29,15 @@ KNOWN_BUNDLED = {
 SKIP_DIRS = {".git", "vendor", "node_modules", "__pycache__", ".tox", "venv", ".venv"}
 
 
-def load_known_mirrors(config_path: Path) -> Set[str]:
-    """Load additional known-bundled packages from config."""
+def load_known_mirrors(repo_config: dict) -> Set[str]:
+    """Load additional known-bundled packages from repo config dict."""
     extras = set()
-    if config_path.exists():
-        try:
-            import yaml
-            with open(config_path) as f:
-                data = yaml.safe_load(f)
-            for pkg in data.get("bundled_packages", []):
-                extras.add(pkg.lower())
-        except Exception:
-            pass
+    mirrors = repo_config.get("known_mirrors")
+    if not isinstance(mirrors, dict):
+        return extras
+    for pkg in mirrors.get("bundled_packages") or []:
+        if isinstance(pkg, str):
+            extras.add(pkg.lower())
     return extras
 
 
@@ -117,8 +114,12 @@ def run(repo_root: str, **_kwargs) -> RuleResult:
     def _is_tracked(fp: Path) -> bool:
         return tracked is None or fp.resolve() in tracked
 
-    config_path = root / ".disconnected-readiness" / "known_mirrors.yaml"
-    known = KNOWN_BUNDLED | load_known_mirrors(config_path)
+    try:
+        from rules.common import load_repo_config
+    except ModuleNotFoundError:
+        from common import load_repo_config
+    repo_config = load_repo_config(root)
+    known = KNOWN_BUNDLED | load_known_mirrors(repo_config)
 
     req_patterns = [
         "requirements*.txt", "constraints*.txt",
