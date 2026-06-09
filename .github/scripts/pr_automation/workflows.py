@@ -94,6 +94,13 @@ class TemplateRenderer:
         with open(template_path, 'r') as f:
             return f.read()
 
+    def render_config_template(self) -> str:
+        """Render config template."""
+        template_path = self.config.get_config_template_path()
+
+        with open(template_path, 'r') as f:
+            return f.read()
+
 
 class SimpleWorkflowManager:
     """Simple workflow management with addition-only principle."""

@@ -22,6 +22,7 @@ class FileOperation:
     file_path: str
     content: str
     operation_type: str  # FILE_OP_CREATE, FILE_OP_UPDATE
+    commit_message: str
     existing_sha: str = None  # Required for updates
 
 
@@ -88,14 +89,14 @@ class PRCreator:
 
 
 
-    def _execute_file_operations(self, repo, file_operations: list, commit_message: str, branch_name: str):
-        """Execute multiple file operations with retry logic."""
+    def _execute_file_operations(self, repo, file_operations: list, branch_name: str):
+        """Execute multiple file operations with retry logic. Each operation uses its own commit message."""
         for operation in file_operations:
             if operation.operation_type == FILE_OP_CREATE:
                 def _create_file():
                     repo.create_file(
                         operation.file_path,
-                        commit_message,
+                        operation.commit_message,
                         operation.content,
                         branch=branch_name
                     )
@@ -105,7 +106,7 @@ class PRCreator:
                 def _update_file():
                     repo.update_file(
                         operation.file_path,
-                        commit_message,
+                        operation.commit_message,
                         operation.content,
                         operation.existing_sha,
                         branch=branch_name
@@ -262,12 +263,13 @@ class PRCreator:
                     reason=f'Failed to create clean branch: {branch_name}'
                 )
 
-            # Prepare file operations
+            # Prepare file operations with specific commit messages
             file_operations = [
                 FileOperation(
                     file_path=".github/workflows/disconnected-readiness.yml",
                     content=workflow_content,
-                    operation_type=FILE_OP_CREATE
+                    operation_type=FILE_OP_CREATE,
+                    commit_message="Add disconnected readiness workflow"
                 )
             ]
 
@@ -275,14 +277,11 @@ class PRCreator:
                 file_operations.append(FileOperation(
                     file_path=".disconnected-readiness/config.yaml",
                     content=self._generate_default_config_content(),
-                    operation_type=FILE_OP_CREATE
+                    operation_type=FILE_OP_CREATE,
+                    commit_message="Add empty config for disconnected readiness customization"
                 ))
 
-            # Build commit message and execute operations
-            commit_message = "Add disconnected readiness workflow"
-            if config_needed:
-                commit_message += ". Empty config added"
-            self._execute_file_operations(repo, file_operations, commit_message, branch_name)
+            self._execute_file_operations(repo, file_operations, branch_name)
 
             # Create PR (with retry)
             def _create_pull_request():
@@ -330,12 +329,13 @@ class PRCreator:
                     reason=f'Failed to create clean branch: {branch_name}'
                 )
 
-            # Prepare file operations
+            # Prepare file operations with specific commit messages
             file_operations = [
                 FileOperation(
                     file_path=".github/workflows/disconnected-readiness.yml",
                     content=updated_content,
                     operation_type=FILE_OP_UPDATE,
+                    commit_message="Update disconnected readiness workflow (preserves customizations)",
                     existing_sha=existing_file.sha
                 )
             ]
@@ -344,14 +344,11 @@ class PRCreator:
                 file_operations.append(FileOperation(
                     file_path=".disconnected-readiness/config.yaml",
                     content=self._generate_default_config_content(),
-                    operation_type=FILE_OP_CREATE
+                    operation_type=FILE_OP_CREATE,
+                    commit_message="Add empty config for disconnected readiness customization"
                 ))
 
-            # Build commit message and execute operations
-            commit_message = "Update disconnected readiness workflow (preserves customizations)"
-            if config_needed:
-                commit_message += ". Empty config added"
-            self._execute_file_operations(repo, file_operations, commit_message, branch_name)
+            self._execute_file_operations(repo, file_operations, branch_name)
 
             # Create PR (with retry)
             def _create_pull_request():
@@ -380,14 +377,8 @@ class PRCreator:
             )
 
     def _generate_default_config_content(self) -> str:
-        """Generate empty config file with schema reference and comments."""
-        return """# yaml-language-server: $schema=https://raw.githubusercontent.com/opendatahub-io/disconnected-readiness-scorer/main/schemas/config.schema.json
-#
-# Per-repository configuration for disconnected readiness scanning.
-# This file allows you to customize scanner behavior for this specific repository.
-#
-# Documentation: https://github.com/opendatahub-io/disconnected-readiness-scorer
-"""
+        """Generate empty config file from template."""
+        return self.template_renderer.render_config_template()
 
     def _generate_new_workflow_pr_body(self, config_added: bool = False) -> str:
         """Generate PR body for new workflow creation."""
