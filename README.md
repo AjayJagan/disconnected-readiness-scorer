@@ -112,7 +112,7 @@ Supports `params_env_ignore` config for excluding keys. When the orchestrator pr
 
 Enforces `@sha256:` digest refs; rejects mutable tags (`:latest`, `:v1.2.3`). Tags cannot be reliably mirrored in disconnected environments.
 
-**Files scanned:** `.go`, `.py`, `.yaml`, `.yml`, `.json`, `.toml`, `Dockerfile`, `Containerfile` (git-tracked only). Directories managed by `params.env` + kustomize are skipped entirely.
+**Files scanned:** `.go`, `.py`, `.yaml`, `.yml`, `.json`, `.toml`, `Dockerfile`, `Containerfile` (git-tracked only). Directories managed by `params.env` + kustomize are skipped entirely. `package.json` files are skipped to avoid false positives from npm package references.
 
 **Detects three image reference patterns:**
 
@@ -167,11 +167,13 @@ Validates Python dependencies against the known-bundled list. Packages not pre-i
 
 Parses the opendatahub-operator source to build the authoritative image manifest (100+ `RELATED_IMAGE_*` env vars across 18 components). Not run by default — included when `csv` or `params_env` detect a pattern needing cross-referencing, or when explicitly selected with `--rules manifest`.
 
+Also extracts **overlay paths** from the operator's Go source (`internal/controller/components/{component}/*_support.go`) to determine which kustomize overlays are actually deployed per platform. This allows `params-env-wiring` to scan only operator-deployed overlays, filtering out upstream overlays (e.g. `overlays/kubeflow`, `overlays/standalone`) that produce false positives. Override with `kustomize_overlays` in per-repo config.
+
 ### production-scope
 
 Not a rule itself, but a cross-cutting optimization for Go repos. Parses all Dockerfiles to find `go build` targets (supports multiple targets per Dockerfile), then runs `go list -deps -json` to compute the transitive dependency set. Files outside the production binary's import graph are downgraded from blocker to info. Only affects `.go` files; non-Go files use existing rule logic. Disabled with `--no-production-scope`.
 
-When operator manifest source folder mapping is available, also scopes YAML files to the operator-referenced kustomize/helm graph.
+When operator manifest source folder mapping is available, also scopes YAML files to the operator-referenced kustomize/helm graph. When overlay paths are auto-detected (or configured via `kustomize_overlays`), passes them to `params-env-wiring` to restrict overlay scanning.
 
 ## Scoring
 
@@ -203,19 +205,21 @@ All policy-based exclusions (test dirs, CI dirs, build files, etc.) are configur
 | `message` | no       | Glob pattern matched against finding message |
 | `repo`    | no       | Repository name filter (matches basename or `org/repo` form) |
 
-Path patterns support `**/` prefix to match at any depth (e.g. `**/Dockerfile` matches both `Dockerfile` and `build/Dockerfile`).
+Path patterns support `**/` prefix to match at any depth (e.g. `**/Dockerfile` matches both `Dockerfile` and `build/Dockerfile`). Patterns ending with `/**` also match the directory itself (e.g. `**/config/scorecard/**` matches both `config/scorecard` and `config/scorecard/foo.yaml`).
 
 ### Default exceptions
 
 The default `config/config.yaml` exceptions include:
 
-- **Test directories:** `test/`, `tests/`, `testdata/`, `testing/`, `e2e/`, `mocks/`, `contract-tests/`, `hack/`
+- **Test directories:** `**/test/**`, `**/*tests*/**`, `**/testdata/**`, `**/testing/**`, `**/e2e/**`, `**/mocks/**`, `**/contract-tests/**`, `**/hack/**`, `**/k8mocks/**`, `**/cypress/**`
 - **Test file suffixes:** `*_test.go`, `test_*.py`, `*.test.ts`, `*.spec.ts`
-- **CI directories:** `.github/`, `.tekton/`, `ci/`
-- **Non-production:** `docs/`, `examples/`
+- **Test fixtures:** `**/recordings/**`, `**/snapshots/**`, `**/*.snap.json`
+- **Test kustomize overlays:** `config/overlays/test/**`, `config/overlays/kind-tests/**`, `config/samples/**`
+- **CI directories:** `.github/`, `.tekton/`, `.buildkite/`, `**/ci/**`
+- **Non-production:** `**/docs/**`, `**/examples/**`, `**/samples/**`, `**/demo/**`, `**/kind-emulator/**`
+- **OLM scorecard:** `**/config/scorecard/**`
 - **Build files:** `**/Dockerfile`, `**/*.Dockerfile`, `**/Containerfile`
 - **Lint config:** `**/semgrep.yaml`, `**/semgrep.yml`
-- **OLM scorecard:** `config/scorecard/` (image rules only)
 
 ### Custom exceptions
 
@@ -262,8 +266,8 @@ known_mirrors:
 exceptions:
   - rule: "*"
     paths:
-      - "test/**"
-      - "tests/**"
+      - "**/test/**"
+      - "**/*tests*/**"
     reason: "Test directory — not deployed in production"
 ```
 

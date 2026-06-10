@@ -1,6 +1,5 @@
 """Tests for rules/operator_manifest.py"""
 
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -8,7 +7,9 @@ import pytest
 from rules.common import RuleResult
 from rules.operator_manifest import (
     clone_operator, parse_component_images, parse_known_issues,
-    build_manifest, run, ImageEntry, COMPONENTS_PATH,
+    build_manifest, run, COMPONENTS_PATH,
+    parse_component_overlay_paths, parse_repo_component_key,
+    _parse_overlay_paths,
 )
 
 
@@ -248,6 +249,117 @@ class TestRun:
         result = run(str(tmp_path))
         info_msgs = [f.message for f in result.findings if f.severity == "info"]
         assert any("1 unique RELATED_IMAGE" in m for m in info_msgs)
+
+class TestParseOverlayPaths:
+    def test_platform_map(self):
+        content = '''
+sourcePathsMap = map[common.Platform]string{
+    cluster.SelfManagedRhoai: "overlays/rhoai",
+    cluster.ManagedRhoai:     "overlays/rhoai",
+    cluster.OpenDataHub:      "overlays/odh",
+}
+'''
+        result = _parse_overlay_paths(content)
+        assert "sourcePathsMap:SelfManagedRhoai" in result
+        assert result["sourcePathsMap:SelfManagedRhoai"] == "overlays/rhoai"
+        assert result["sourcePathsMap:OpenDataHub"] == "overlays/odh"
+
+    def test_named_const(self):
+        content = 'kserveManifestSourcePath = "overlays/odh"'
+        result = _parse_overlay_paths(content)
+        assert result["kserveManifestSourcePath"] == "overlays/odh"
+
+    def test_struct_fallback(self):
+        content = '''
+ReconcilableBase{
+    SourcePath: "config/base",
+}'''
+        result = _parse_overlay_paths(content)
+        assert result["default"] == "config/base"
+
+    def test_display_strings_skipped(self):
+        content = '''
+displayNames = map[common.Platform]string{
+    cluster.SelfManagedRhoai: "KServe for RHOAI",
+    cluster.OpenDataHub:      "KServe for ODH",
+}
+'''
+        result = _parse_overlay_paths(content)
+        assert result == {}
+
+
+class TestParseComponentOverlayPaths:
+    def _make_component(self, tmp_path, name, go_content):
+        comp_dir = tmp_path / "internal" / "controller" / "components" / name
+        comp_dir.mkdir(parents=True)
+        (comp_dir / f"{name}_support.go").write_text(go_content)
+
+    def test_extracts_overlay_from_platform_map(self, tmp_path):
+        self._make_component(tmp_path, "kserve", '''
+sourcePathsMap = map[common.Platform]string{
+    cluster.SelfManagedRhoai: "overlays/odh",
+    cluster.OpenDataHub:      "overlays/odh",
+}
+''')
+        paths = parse_component_overlay_paths(str(tmp_path), "kserve")
+        assert paths == ["overlays/odh"]
+
+    def test_prioritises_rhoai(self, tmp_path):
+        self._make_component(tmp_path, "dashboard", '''
+sourcePathsMap = map[common.Platform]string{
+    cluster.SelfManagedRhoai: "overlays/rhoai",
+    cluster.OpenDataHub:      "overlays/odh",
+}
+''')
+        paths = parse_component_overlay_paths(str(tmp_path), "dashboard")
+        assert paths[0] == "overlays/rhoai"
+        assert "overlays/odh" in paths
+
+    def test_component_key_with_slash(self, tmp_path):
+        self._make_component(tmp_path, "workbenches", '''
+sourcePathsMap = map[common.Platform]string{
+    cluster.OpenDataHub: "overlays/odh",
+}
+''')
+        paths = parse_component_overlay_paths(
+            str(tmp_path), "workbenches/kf-notebook-controller",
+        )
+        assert paths == ["overlays/odh"]
+
+    def test_component_dir_map(self, tmp_path):
+        self._make_component(tmp_path, "modelsasservice", '''
+maasManifestSourcePath = "overlays/odh"
+''')
+        paths = parse_component_overlay_paths(str(tmp_path), "maas")
+        assert paths == ["overlays/odh"]
+
+    def test_skip_operator_component(self):
+        paths = parse_component_overlay_paths("/nonexistent", "operator")
+        assert paths == []
+
+    def test_missing_dir_returns_empty(self, tmp_path):
+        paths = parse_component_overlay_paths(str(tmp_path), "nonexistent")
+        assert paths == []
+
+
+class TestParseRepoComponentKey:
+    def test_parses_manifest_entries(self, tmp_path):
+        script = tmp_path / "get_all_manifests.sh"
+        script.write_text('''
+declare -A ODH_COMPONENT_MANIFESTS=(
+    ["dashboard"]="opendatahub-io:odh-dashboard:main:manifests"
+    ["workbenches/kf-notebook-controller"]="opendatahub-io:kubeflow:main:config"
+    ["kserve"]="opendatahub-io:kserve:release-v0.17:config"
+)
+''')
+        result = parse_repo_component_key(str(tmp_path))
+        assert result["odh-dashboard"] == "dashboard"
+        assert result["kubeflow"] == "workbenches/kf-notebook-controller"
+        assert result["kserve"] == "kserve"
+
+    def test_missing_script(self, tmp_path):
+        assert parse_repo_component_key(str(tmp_path)) == {}
+
 
     def test_known_issues_become_info(self, tmp_path):
         (tmp_path / COMPONENTS_PATH).mkdir(parents=True)

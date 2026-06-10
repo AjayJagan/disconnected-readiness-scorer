@@ -27,6 +27,7 @@ class ProductionScope:
     method: str            # e.g. "go-import-graph"
     manifest_files: Optional[set] = None  # resolved YAML paths in kustomize/helm graph
     manifest_source: Optional[str] = None  # e.g. "config" (source folder)
+    overlay_paths: Optional[list] = None   # operator-deployed overlay dirs
 
 
 def is_in_production_scope(filepath: Path, production_scope: Optional[ProductionScope]) -> Optional[bool]:

@@ -642,27 +642,59 @@ def _run(args, operator_path):
         manifest, manifest_env_vars = load_manifest(operator_path)
         _tlog("load_manifest", time.monotonic() - t0)
 
+    if getattr(args, "repo_config", None):
+        repo_config = load_config_file(Path(args.repo_config))
+    else:
+        repo_config = load_repo_config(Path(repo_root))
+
     prod_scope = None
     if not getattr(args, "no_production_scope", False):
         t0 = time.monotonic()
         manifest_source_folders = None
+        overlay_paths = None
         try:
             op_manifest_mod = importlib.import_module("rules.operator_manifest")
+            repo_basename = os.path.basename(repo_root)
             if hasattr(op_manifest_mod, "parse_component_manifest_mapping"):
                 mapping = op_manifest_mod.parse_component_manifest_mapping(operator_path)
-                repo_basename = os.path.basename(repo_root)
                 manifest_source_folders = mapping.get(repo_basename)
                 if manifest_source_folders:
                     print(
                         f"  Operator mapping: {repo_basename} → {manifest_source_folders}",
                         file=sys.stderr,
                     )
-        except Exception:
-            pass
+            if hasattr(op_manifest_mod, "parse_component_overlay_paths"):
+                repo_config_overlays = repo_config.get("kustomize_overlays") if repo_config else None
+                if repo_config_overlays:
+                    overlay_paths = repo_config_overlays
+                    print(
+                        f"  Overlay paths (from repo config): {overlay_paths}",
+                        file=sys.stderr,
+                    )
+                else:
+                    key_map = op_manifest_mod.parse_repo_component_key(operator_path)
+                    component_key = key_map.get(repo_basename)
+                    if component_key:
+                        overlay_paths = op_manifest_mod.parse_component_overlay_paths(
+                            operator_path, component_key,
+                        )
+                        if overlay_paths:
+                            print(
+                                f"  Overlay paths (auto-detected for {component_key}): {overlay_paths}",
+                                file=sys.stderr,
+                            )
+        except Exception as e:
+            repo_basename = repo_basename if 'repo_basename' in dir() else os.path.basename(repo_root)
+            print(
+                f"  WARNING: operator manifest handling failed for "
+                f"{operator_path}/{repo_basename}: {e}",
+                file=sys.stderr,
+            )
 
         prod_scope = compute_production_scope(
             Path(repo_root),
             manifest_source_folders=manifest_source_folders,
+            overlay_paths=overlay_paths,
         )
         _tlog("production_scope", time.monotonic() - t0)
         if prod_scope:
@@ -698,11 +730,6 @@ def _run(args, operator_path):
         result = mod.run(repo_root, **kwargs)
         _tlog(f"rule {key}", time.monotonic() - t0)
         results.append(result)
-
-    if getattr(args, "repo_config", None):
-        repo_config = load_config_file(Path(args.repo_config))
-    else:
-        repo_config = load_repo_config(Path(repo_root))
 
     exceptions, error_result = _load_all_exceptions(args, repo_root, repo_config)
     if error_result:
