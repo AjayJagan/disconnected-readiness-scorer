@@ -13,22 +13,22 @@
 #
 
 included_repositories:
-  # - opendatahub-io/odh-dashboard
-  # - opendatahub-io/kubeflow
-  # - opendatahub-io/notebooks
-  # - opendatahub-io/kserve
-  # - opendatahub-io/kuberay
-  # - opendatahub-io/trustyai-service-operator
-  # - opendatahub-io/model-registry-operator
-  # - opendatahub-io/training-operator
-  # - opendatahub-io/data-science-pipelines-operator
-  # - opendatahub-io/odh-model-controller
-  # - opendatahub-io/feast
-  # - opendatahub-io/ogx-k8s-operator
-  # - opendatahub-io/trainer
-  # - opendatahub-io/models-as-a-service
-  # - opendatahub-io/mlflow-operator
-  # - opendatahub-io/spark-operator
-  # - opendatahub-io/workload-variant-autoscaler
+  - opendatahub-io/odh-dashboard
+  - opendatahub-io/kubeflow
+  - opendatahub-io/notebooks
+  - opendatahub-io/kserve
+  - opendatahub-io/kuberay
+  - opendatahub-io/trustyai-service-operator
+  - opendatahub-io/model-registry-operator
+  - opendatahub-io/training-operator
+  - opendatahub-io/data-science-pipelines-operator
+  - opendatahub-io/odh-model-controller
+  - opendatahub-io/feast
+  - opendatahub-io/ogx-k8s-operator
+  - opendatahub-io/trainer
+  - opendatahub-io/models-as-a-service
+  - opendatahub-io/mlflow-operator
+  - opendatahub-io/spark-operator
+  - opendatahub-io/workload-variant-autoscaler
   - opendatahub-io/opendatahub-operator
   # - opendatahub-io/opendatahub-tests
