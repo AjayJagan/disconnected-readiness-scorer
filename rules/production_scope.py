@@ -340,12 +340,17 @@ def collect_manifest_scope_files(source_dir: Path) -> Optional[set[Path]]:
 def compute_production_scope(
     repo_root: Path,
     manifest_source_folders: Optional[list] = None,
+    overlay_paths: Optional[list] = None,
 ) -> Optional[ProductionScope]:
     """Compute the production file scope for a repository.
 
     *manifest_source_folders* is an optional list of relative directories
     (e.g. ``["config"]``) containing production manifests.  When provided,
     the kustomize / helm graph is walked to populate ``manifest_files``.
+
+    *overlay_paths* is an optional list of overlay dirs (relative to the
+    manifest source folder) that the operator actually deploys.  Passed
+    through to ``ProductionScope`` for use by ``params_env``.
 
     Returns ``None`` only when neither Go scope nor manifest scope can be
     determined.
@@ -420,4 +425,5 @@ def compute_production_scope(
         method="go-import-graph" if production_files else "manifest-only",
         manifest_files=manifest_files,
         manifest_source=manifest_source_str,
+        overlay_paths=overlay_paths,
     )

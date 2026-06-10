@@ -24,15 +24,17 @@ exceptions:
   # Test directories
   - rule: "*"
     paths:
-      - "test/**"
-      - "tests/**"
-      - "testdata/**"
+      - "**/test/**"
+      - "**/*tests*/**"
       - "**/testdata/**"
-      - "testing/**"
-      - "e2e/**"
-      - "mocks/**"
-      - "contract-tests/**"
-      - "hack/**"
+      - "**/testing/**"
+      - "**/e2e/**"
+      - "**/mocks/**"
+      - "**/contract-tests/**"
+      - "**/hack/**"
+      - "**/k8mocks/**"
+      - "**/*e2e*/**"
+      - "**/cypress/**"
     reason: "Test/dev directory — not deployed in production"
 
   # Test file patterns
@@ -77,21 +79,23 @@ exceptions:
       - ".github/**"
       - ".tekton/**"
       - ".buildkite/**"
-      - "ci/**"
+      - "**/ci/**"
     reason: "CI config — not deployed in production"
 
   # Non-production directories
   - rule: "*"
     paths:
-      - "docs/**"
-      - "examples/**"
-      - "samples/**"
-      - "demo/**"
+      - "**/docs/**"
+      - "**/examples/**"
+      - "**/samples/**"
+      - "**/demo/**"
+      - "**/kind-emulator/**"
     reason: "Non-production content — not deployed in production"
 
   # Scorecard config
-  - rule: "image-manifest-complete, no-image-tags"
-    path: "config/scorecard/**"
+  - rule: "*"
+    paths:
+      - "**/config/scorecard/**"
     reason: "OLM scorecard config — test images, not production"
 
   # Build files

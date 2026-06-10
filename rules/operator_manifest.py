@@ -48,7 +48,7 @@ class Manifest:
 
 
 _MANIFEST_ENTRY_RE = re.compile(
-    r'\["[^"]*"\]\s*=\s*"([^:]+):([^:]+):([^:]+):([^"]+)"'
+    r'\["([^"]*)"\]\s*=\s*"([^:]+):([^:]+):([^:]+):([^"]+)"'
 )
 
 
@@ -69,13 +69,144 @@ def parse_component_manifest_mapping(operator_path: str) -> Dict[str, List[str]]
 
     mapping: Dict[str, List[str]] = {}
     for match in _MANIFEST_ENTRY_RE.finditer(content):
-        repo_name = match.group(2)
-        source_folder = match.group(4)
+        repo_name = match.group(3)
+        source_folder = match.group(5)
         mapping.setdefault(repo_name, [])
         if source_folder not in mapping[repo_name]:
             mapping[repo_name].append(source_folder)
 
     return mapping
+
+
+def parse_repo_component_key(operator_path: str) -> Dict[str, str]:
+    """Parse get_all_manifests.sh to build repo-name → component-key mapping.
+
+    Returns e.g. ``{'kserve': 'kserve', 'kubeflow': 'workbenches/kf-notebook-controller'}``.
+    """
+    script = Path(operator_path) / "get_all_manifests.sh"
+    if not script.is_file():
+        return {}
+    try:
+        content = script.read_text()
+    except (OSError, UnicodeDecodeError):
+        return {}
+
+    mapping: Dict[str, str] = {}
+    for match in _MANIFEST_ENTRY_RE.finditer(content):
+        component_key = match.group(1)
+        repo_name = match.group(3)
+        mapping.setdefault(repo_name, component_key)
+    return mapping
+
+
+_COMPONENT_DIR_MAP = {
+    'maas': 'modelsasservice',
+}
+
+_SKIP_OVERLAY_COMPONENTS = {'operator'}
+
+_PLATFORM_PRIORITY = ['SelfManagedRhoai', 'ManagedRhoai', 'OpenDataHub']
+
+
+def _parse_overlay_paths(content: str) -> Dict[str, str]:
+    """Extract overlay/source paths from operator Go source.
+
+    Adapted from architecture-context/lib/kustomize_context.py.
+    """
+    overlay_paths: Dict[str, str] = {}
+
+    # Pattern 1: map[common.Platform]string with platform keys
+    map_pattern = r'(\w+)\s*=\s*map\[(?:common\.)?Platform\]string\s*\{(.*?)\}'
+    for map_match in re.finditer(map_pattern, content, re.DOTALL):
+        var_name = map_match.group(1)
+        map_body = map_match.group(2)
+        entry_pattern = (
+            r'cluster\.(SelfManagedRhoai|ManagedRhoai'
+            r'|OpenDataHub)\s*:\s*"([^"]*)"'
+        )
+        entries = {
+            m.group(1): m.group(2)
+            for m in re.finditer(entry_pattern, map_body)
+        }
+        if not entries:
+            continue
+        if all(' ' in v for v in entries.values()):
+            continue
+        for platform, path in entries.items():
+            key = f"{var_name}:{platform}"
+            overlay_paths[key] = path.lstrip('/')
+
+    # Pattern 2: named const/var with path value
+    const_pattern = r'(\w*(?:Manifest|Source)\w*Path\w*)\s*=\s*"([^"]*)"'
+    for match in re.finditer(const_pattern, content):
+        name = match.group(1)
+        path = match.group(2).lstrip('/')
+        if name not in overlay_paths:
+            overlay_paths[name] = path
+
+    # Pattern 3 (fallback): SourcePath: "literal" in struct literals
+    if not overlay_paths:
+        struct_pattern = r'SourcePath:\s*"([^"]+)"'
+        for match in re.finditer(struct_pattern, content):
+            path = match.group(1).lstrip('/')
+            overlay_paths['default'] = path
+            break
+
+    return overlay_paths
+
+
+def parse_component_overlay_paths(
+    operator_path: str, component_key: str,
+) -> List[str]:
+    """Extract deployed overlay paths for a component from operator Go source.
+
+    Returns a deduplicated list of overlay paths, prioritising RHOAI platforms.
+    """
+    if component_key in _SKIP_OVERLAY_COMPONENTS:
+        return []
+
+    if '/' in component_key:
+        dir_name = component_key.split('/')[0]
+    else:
+        dir_name = _COMPONENT_DIR_MAP.get(component_key, component_key)
+
+    component_dir = (
+        Path(operator_path) / "internal" / "controller"
+        / "components" / dir_name
+    )
+    if not component_dir.exists():
+        return []
+
+    content = ""
+    for go_file in sorted(component_dir.glob("*.go")):
+        if go_file.name.endswith("_test.go"):
+            continue
+        try:
+            content += go_file.read_text() + "\n"
+        except (OSError, UnicodeDecodeError):
+            continue
+
+    if not content:
+        return []
+
+    raw = _parse_overlay_paths(content)
+    if not raw:
+        return []
+
+    # Deduplicate and prioritise by platform
+    seen = set()
+    result: List[str] = []
+    for platform in _PLATFORM_PRIORITY:
+        for key, path in raw.items():
+            if platform in key and path not in seen:
+                seen.add(path)
+                result.append(path)
+    for path in raw.values():
+        if path not in seen:
+            seen.add(path)
+            result.append(path)
+
+    return result
 
 
 def clone_operator(target_dir: Path) -> Path:

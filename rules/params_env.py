@@ -348,6 +348,9 @@ def run(repo_root: str, manifest_env_vars: set[str] | None = None,
     repo_config = load_repo_config(root)
     kustomize_overlay_dirs = repo_config.get("kustomize_overlays") or None
 
+    if not kustomize_overlay_dirs and production_scope and production_scope.overlay_paths:
+        kustomize_overlay_dirs = production_scope.overlay_paths
+
     overlays = discover_overlays(root)
     if not overlays and not manifest_source:
         return result
@@ -385,6 +388,14 @@ def run(repo_root: str, manifest_env_vars: set[str] | None = None,
                 overlay_dirs=kustomize_overlay_dirs,
             )
     else:
+        if kustomize_overlay_dirs:
+            filtered = []
+            for o in overlays:
+                rel = o.relative_to(root)
+                if any(rel == Path(d) or rel.is_relative_to(Path(d))
+                       for d in kustomize_overlay_dirs):
+                    filtered.append(o)
+            overlays = filtered
         total_overlays = _process_discover_overlays(
             overlays, root, ignored_keys, result,
             all_repo_params, all_manifest_related_vars,

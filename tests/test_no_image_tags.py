@@ -297,6 +297,14 @@ class TestOciUri:
         assert result.passed is False
 
 
+class TestNpmPackagesNotDetected:
+    def test_package_json_skipped(self, tmp_path):
+        f = tmp_path / "package.json"
+        f.write_text('{"dependencies": {"vscode/l10n-dev": "0.0.35"}}')
+        result = run(str(tmp_path))
+        assert result.findings == []
+
+
 class TestK8sUnqualifiedImage:
     def test_unqualified_image_in_yaml_is_blocker(self, tmp_path):
         f = tmp_path / "job.yaml"

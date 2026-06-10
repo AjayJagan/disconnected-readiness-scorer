@@ -30,7 +30,10 @@ YAML_EXTENSIONS = {".yaml", ".yml"}
 
 SOURCE_EXTENSIONS = {".go", ".py", ".ts", ".tsx", ".sh"}
 
-_SKIP_FILENAMES = {"package-lock.json", "yarn.lock", "pnpm-lock.yaml"}
+_SKIP_FILENAMES = {
+    "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
+    "package.json",
+}
 
 
 def is_excluded_file(filepath: Path) -> bool:

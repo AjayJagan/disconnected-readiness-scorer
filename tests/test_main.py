@@ -547,6 +547,21 @@ class TestApplyExceptions:
         assert results[0].findings[1].severity == "blocker"
         assert results[0].passed is False
 
+    def test_doublestar_suffix_matches_bare_dir(self):
+        results = [RuleResult(
+            rule="no-image-tags", passed=False,
+            findings=[
+                Finding("blocker", "config/scorecard", 1, "img", "bad"),
+                Finding("blocker", "config/scorecard/foo.yaml", 2, "img2", "bad"),
+                Finding("blocker", "config/manager/deploy.yaml", 3, "img3", "bad"),
+            ],
+        )]
+        exceptions = [{"rule": "*", "paths": ["**/config/scorecard/**"], "reason": "test"}]
+        apply_exceptions(results, exceptions, "repo")
+        assert results[0].findings[0].severity == "info"
+        assert results[0].findings[1].severity == "info"
+        assert results[0].findings[2].severity == "blocker"
+
     def test_repo_filter_matches(self):
         results = [RuleResult(
             rule="no-runtime-egress", passed=False,

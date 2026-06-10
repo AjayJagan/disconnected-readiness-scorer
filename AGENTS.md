@@ -69,8 +69,8 @@ All rules output JSON to stdout with `rule`, `passed`, and `findings` fields.
 - `image_manifest_complete.py` — Auto-detects whether the target repo uses `RELATED_IMAGE_*` env vars (opendatahub-operator pattern) or static CSV `relatedImages`, then checks image completeness against the detected pattern. Accepts optional `manifest_env_vars` parameter — when provided by the orchestrator, cross-references the target repo's env vars against the authoritative operator manifest (blocker for invalid or stale vars). Filters scanned files to git-tracked only.
 - `params_env.py` — Validates repos using the `params.env` + kustomize pattern. Requires kustomize binary. Validates the full wiring chain: params.env → kustomize configMap → rendered manifest → Go os.Getenv. Detects hardcoded images not sourced from params.env (blocker), unwired params.env keys (blocker), and orphan Go os.Getenv calls (blocker). Supports `params_env_ignore` in per-repo config for excluding keys. Accepts optional `manifest_env_vars` for operator manifest cross-referencing.
 - `params_env_utils.py` — Utility functions for params.env + kustomize validation, adapted from `verify-params-env-images.py`. Handles params.env parsing, overlay discovery, kustomize build, probe-based hardcoded image detection, configMapKeyRef wiring, and Go env var cross-referencing. Used by `params_env.py`.
-- `operator_manifest.py` — Parses the opendatahub-operator source to build the authoritative image manifest via `build_manifest()`. Returns a dict (not RuleResult); the orchestrator adapts it via `adapt_manifest_result()`. When no `--operator-path` is provided, `main.py` uses `tempfile.TemporaryDirectory(prefix="odh-operator-")` and clones the operator repo there.
-- `no_image_tags.py` — Enforces `@sha256:` digest refs; rejects mutable tags. Detects three patterns: qualified images (`registry/org/name:tag`), `oci://` URIs without digest pin, and unqualified k8s images (`image: name:tag` in YAML `image:` fields). Source code and manifest files produce blocker severity. Skips directories managed by params.env + kustomize. Filters to git-tracked files only. HTTP/HTTPS URLs are excluded from image detection.
+- `operator_manifest.py` — Parses the opendatahub-operator source to build the authoritative image manifest via `build_manifest()`. Returns a dict (not RuleResult); the orchestrator adapts it via `adapt_manifest_result()`. When no `--operator-path` is provided, `main.py` uses `tempfile.TemporaryDirectory(prefix="odh-operator-")` and clones the operator repo there. Also extracts overlay paths from operator Go source (`parse_component_overlay_paths()`) to determine which kustomize overlays are actually deployed per platform — used by `params_env` to filter out non-production overlays.
+- `no_image_tags.py` — Enforces `@sha256:` digest refs; rejects mutable tags. Detects three patterns: qualified images (`registry/org/name:tag`), `oci://` URIs without digest pin, and unqualified k8s images (`image: name:tag` in YAML `image:` fields). Source code and manifest files produce blocker severity. Skips directories managed by params.env + kustomize. Filters to git-tracked files only. HTTP/HTTPS URLs are excluded from image detection. Skips `package.json` files to avoid false positives from npm package references.
 - `no_runtime_egress.py` — Detects outbound HTTP calls in Go/Python/TS/shell source. Distinguishes hardcoded URLs (blocker) from configurable ones (info). Also detects HuggingFace model downloads (`hf download`, `huggingface-cli download`) as always-blocker. Filters to git-tracked files only.
 - `python_imports.py` — Validates Python deps against the known-bundled list. Checks requirements files, `setup.py`, `pyproject.toml`, and runtime `pip install` calls.
 
@@ -97,6 +97,10 @@ All rules output JSON to stdout with `rule`, `passed`, and `findings` fields.
 |----------|---------|
 | blocker | Will or may break disconnected — must be fixed or granted an exception |
 | info | Excluded file, configurable pattern, or informational — does not block |
+
+## Post-Change Checklist
+
+After modifying rules, config, or architecture, update `README.md` and `AGENTS.md` to reflect the changes. Both files document rule behavior, config options, exceptions, and architecture — they must stay in sync with the code.
 
 ## Key Design Decisions
 
