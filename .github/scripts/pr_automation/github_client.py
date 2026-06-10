@@ -82,9 +82,19 @@ class GitHubClient:
         }
 
     def get_account(self, org_name: str) -> Tuple[Any, str, int]:
-        """Get organization account with retry logic."""
+        """Get organization or user account with retry logic."""
         def _get_account():
-            account = self.client.get_organization(org_name)
-            return account, "organization", account.public_repos
+            try:
+                # Try organization first
+                account = self.client.get_organization(org_name)
+                return account, "organization", account.public_repos
+            except Exception as org_error:
+                # If organization lookup fails, try user
+                try:
+                    account = self.client.get_user(org_name)
+                    return account, "user", account.public_repos
+                except Exception:
+                    # If both fail, raise a combined error message
+                    raise Exception(f"Could not find organization or user '{org_name}'. Original org error: {org_error}")
 
         return retry_github_operation(_get_account)

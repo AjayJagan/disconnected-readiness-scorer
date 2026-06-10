@@ -24,8 +24,8 @@ jobs:
       - name: Checkout scorer
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
-          repository: opendatahub-io/disconnected-readiness-scorer
-          ref: ba74d720ac58971dc247a8043b0241f48e5028e5 # Pinned to specific commit for deterministic execution
+          repository: AjayJagan/disconnected-readiness-scorer
+          ref: main # Pinned to current commit for deterministic execution
           path: scorer
 
       - name: Run disconnected readiness check
@@ -35,11 +35,14 @@ jobs:
           pip install pyyaml jinja2
           cd scorer
 
+          # Build command with rules if specified
+          CMD="python3 main.py \"${{ github.workspace }}\" --report json"
           if [ -n "$INPUT_RULES" ]; then
-            python3 main.py "${{ github.workspace }}" --rules "$INPUT_RULES" --report json
-          else
-            python3 main.py "${{ github.workspace }}" --report json
+            CMD="$CMD --rules \"$INPUT_RULES\""
           fi
+
+          # Run analysis and capture JSON output
+          eval $CMD > disconnected-report.json
 
       - name: Store results as artifact
         if: always()

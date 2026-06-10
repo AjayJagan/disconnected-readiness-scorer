@@ -4,15 +4,22 @@
 # DRS PR automation. Only repositories listed here will have
 # disconnected readiness workflows created or updated.
 #
-# Empty list = no repos processed (safe default for phased rollout).
+# Updated for AjayJagan organization testing.
 # Add repos as they are onboarded.
 #
 # Format:
 #   included_repositories:
-#     - org/repo-name
+#     - repo-name  (without org prefix for same-org repos)
 #
 
 included_repositories:
+  # Test repositories for AjayJagan organization
+  - AjayJagan/opendatahub-operator # Self-test
+  # Add any other AjayJagan repositories you want to test with:
+  # - "your-test-repo"
+  # - "another-test-repo"
+
+  # Original opendatahub-io repositories (commented for reference):
   # - opendatahub-io/odh-dashboard
   # - opendatahub-io/kubeflow
   # - opendatahub-io/notebooks
@@ -30,5 +37,5 @@ included_repositories:
   # - opendatahub-io/mlflow-operator
   # - opendatahub-io/spark-operator
   # - opendatahub-io/workload-variant-autoscaler
-  - opendatahub-io/opendatahub-operator
+  # - opendatahub-io/opendatahub-operator
   # - opendatahub-io/opendatahub-tests

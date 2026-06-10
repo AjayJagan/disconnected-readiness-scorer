@@ -10,7 +10,7 @@ on:
       organizations:
         description: 'Comma-separated list of organizations to process'
         required: false
-        default: 'opendatahub-io'
+        default: 'AjayJagan'
       dry_run:
         description: 'Dry run mode (analyze only, no PRs created)'
         required: false
@@ -52,6 +52,19 @@ jobs:
       with:
         client-id: ${{ secrets.GH_APP_DR_CLIENT_ID }}
         private-key: ${{ secrets.GH_APP_DR_PRIVATE_KEY }}
+        owner: AjayJagan  # Specify the account to generate token for
+
+    - name: Debug GitHub App Token
+      run: |
+        echo "Testing GitHub App token permissions..."
+        echo "User info:"
+        curl -s -H "Authorization: Bearer ${{ steps.app-token.outputs.token }}" \
+          "https://api.github.com/user" | jq -r '.login // "ERROR"'
+
+        echo "Checking target repo access:"
+        curl -s -H "Authorization: Bearer ${{ steps.app-token.outputs.token }}" \
+          "https://api.github.com/repos/AjayJagan/opendatahub-operator" \
+          | jq -r '.permissions // "NO_PERMISSIONS"'
 
     - name: Set up Python
       uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
@@ -72,17 +85,17 @@ jobs:
       run: |
         if [[ "${EVENT_NAME}" == "push" ]]; then
           echo "trigger_reason=template_change" >> $GITHUB_OUTPUT
-          echo "organizations=opendatahub-io" >> $GITHUB_OUTPUT
+          echo "organizations=AjayJagan" >> $GITHUB_OUTPUT
           echo "dry_run=false" >> $GITHUB_OUTPUT
           echo "force_full_scan=true" >> $GITHUB_OUTPUT
         elif [[ "${EVENT_NAME}" == "schedule" ]]; then
           echo "trigger_reason=scheduled" >> $GITHUB_OUTPUT
-          echo "organizations=opendatahub-io" >> $GITHUB_OUTPUT
+          echo "organizations=AjayJagan" >> $GITHUB_OUTPUT
           echo "dry_run=false" >> $GITHUB_OUTPUT
           echo "force_full_scan=false" >> $GITHUB_OUTPUT
         else
           echo "trigger_reason=manual" >> $GITHUB_OUTPUT
-          echo "organizations=${INPUT_ORGANIZATIONS:-opendatahub-io}" >> $GITHUB_OUTPUT
+          echo "organizations=${INPUT_ORGANIZATIONS:-AjayJagan}" >> $GITHUB_OUTPUT
           echo "dry_run=${INPUT_DRY_RUN:-true}" >> $GITHUB_OUTPUT
           echo "force_full_scan=${INPUT_FORCE_FULL_SCAN:-false}" >> $GITHUB_OUTPUT
         fi
