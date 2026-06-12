@@ -43,7 +43,18 @@ jobs:
           fi
           python3 run_all.py "${args[@]}" || true
 
+      - name: Show summary
+        if: always()
+        run: |
+          summary=$(find reports -name summary.md -type f 2>/dev/null | head -1)
+          if [ -n "$summary" ]; then
+            cat "$summary" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "⚠️ No summary.md generated" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Upload reports
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: readiness-reports
