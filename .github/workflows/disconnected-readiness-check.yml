@@ -32,7 +32,7 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: opendatahub-io/disconnected-readiness-scorer
-          ref: f8ec39b25663c6e705e3bc19b893c924d691477f # Pinned to specific commit for deterministic execution
+          ref: a03726c8a7dd37b0c27105c2a67395c16c3f74b9 # Pinned to specific commit for deterministic execution
           path: scorer
 
       - name: Run disconnected readiness check
@@ -42,11 +42,14 @@ jobs:
           pip install pyyaml jinja2
           cd scorer
 
+          # Build arguments array with rules if specified
+          ARGS=("${{ github.workspace }}" --report json)
           if [ -n "$INPUT_RULES" ]; then
-            python3 main.py "${{ github.workspace }}" --rules "$INPUT_RULES" --report json
-          else
-            python3 main.py "${{ github.workspace }}" --report json
+            ARGS+=(--rules "$INPUT_RULES")
           fi
+
+          # Run analysis and capture JSON output
+          python3 main.py "${ARGS[@]}" > disconnected-report.json
 
       - name: Store results as artifact
         if: always()
