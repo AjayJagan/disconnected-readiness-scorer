@@ -2,8 +2,6 @@
 #
 # Central configuration for the disconnected readiness scanner.
 # Applies to all scanned repos unless scoped by 'repo' field.
-# Per-repo overrides can also go in
-# .disconnected-readiness/config.yaml in the target repository.
 
 registries:
   - registry.redhat.io

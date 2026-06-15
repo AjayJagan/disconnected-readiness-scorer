@@ -107,13 +107,6 @@ def _collect_kustomize_tree(overlay_dir: Path, dirs: set[Path]):
                 in_resources = False
 
 
-CONFIG_DIR = ".disconnected-readiness"
-CONFIG_FILE = "config.yaml"
-
-
-def load_repo_config(root: Path) -> dict:
-    """Load per-repo scanner config from .disconnected-readiness/config.yaml."""
-    return load_config_file(root / CONFIG_DIR / CONFIG_FILE)
 
 
 def load_config_file(config_path: Path) -> dict:

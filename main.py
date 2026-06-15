@@ -21,14 +21,12 @@ from pathlib import Path
 import yaml
 
 from rules.common import (
-    Finding, RuleResult, CONFIG_DIR, CONFIG_FILE,
-    load_repo_config, load_config_file,
+    Finding, RuleResult,
 )
 from rules.production_scope import compute_production_scope
 
 SEVERITY_ORDER = {"blocker": 0, "info": 1}
 CENTRAL_CONFIG_PATH = "config/config.yaml"
-REPO_CONFIG_PATH = f"{CONFIG_DIR}/{CONFIG_FILE}"
 
 RULE_REGISTRY = {
     "csv": {
@@ -187,58 +185,6 @@ def apply_exceptions(results, exceptions, repo_name):
             result.passed = True
 
 
-def validate_repo_exceptions(exceptions, config_path):
-    """Validate per-repo exceptions — self-contained, does not depend on load_exceptions.
-
-    Checks all constraints: required fields (rule, reason), unknown fields,
-    forbidden repo field, scope filter requirement, and type correctness.
-    """
-    known_fields = {"rule", "path", "image", "message", "reason", "reference", "repo"}
-    for i, exc in enumerate(exceptions):
-        if not isinstance(exc, dict):
-            raise ValueError(
-                f"Exception entry {i + 1} in {config_path} "
-                f"must be a mapping, got {type(exc).__name__}"
-            )
-
-        label = f"Exception entry {i + 1} (rule={exc.get('rule', '?')}) in {config_path}"
-
-        if not exc.get("rule"):
-            raise ValueError(
-                f"Exception entry {i + 1} in {config_path} "
-                f"is missing required 'rule' field"
-            )
-        if not exc.get("reason"):
-            raise ValueError(
-                f"{label} is missing required 'reason' field"
-            )
-
-        unknown = set(exc.keys()) - known_fields
-        if unknown:
-            raise ValueError(
-                f"{label} has unknown field(s): {', '.join(sorted(unknown))}. "
-                f"Valid fields: {', '.join(sorted(known_fields))}"
-            )
-
-        if "repo" in exc:
-            raise ValueError(
-                f"{label}: 'repo' field is not allowed in per-repo exception files"
-            )
-
-        for field in ("path", "image", "message"):
-            val = exc.get(field)
-            if val is not None and not isinstance(val, str):
-                raise ValueError(
-                    f"{label}: '{field}' must be a string, "
-                    f"got {type(val).__name__}"
-                )
-
-        has_scope = any(exc.get(f) for f in ("path", "image", "message"))
-        if not has_scope:
-            raise ValueError(
-                f"{label} must have at least one scope filter "
-                f"(path, image, or message)"
-            )
 
 
 def parse_args(argv=None):
@@ -271,11 +217,6 @@ def parse_args(argv=None):
     parser.add_argument(
         "--config",
         help=f"Path to central config.yaml (default: {CENTRAL_CONFIG_PATH}).",
-    )
-    parser.add_argument(
-        "--repo-config",
-        help=f"Path to per-repo config.yaml "
-             f"(default: <repo_root>/{REPO_CONFIG_PATH}).",
     )
     parser.add_argument(
         "--no-production-scope", action="store_true",
@@ -492,7 +433,7 @@ def _build_false_positive_section(snippets):
         "## Reporting False Positives",
         "",
         f"{count} blocker {noun} above may be false positives.",
-        f"To unblock your PR, add an exception to `{REPO_CONFIG_PATH}`.",
+        f"To unblock your PR, add an exception to the central config file.",
         f"See [{readme_url}]({readme_url}) for the format and required fields.",
         "",
     ]
@@ -566,43 +507,16 @@ def _get_repo_name(repo_root):
     return os.path.basename(repo_root)
 
 
-def _load_all_exceptions(args, repo_root, repo_config):
-    """Load central and per-repo exceptions, validate, and merge.
+def _load_central_exceptions(args):
+    """Load central exceptions.
 
-    Returns (merged_exceptions, error_result_or_None).
+    Returns (exceptions, error_result_or_None).
     """
     config_path = args.config or str(
         Path(__file__).parent / CENTRAL_CONFIG_PATH
     )
     central = load_central_config(config_path)
     exceptions = central["exceptions"]
-
-    repo_exceptions = repo_config.get("exceptions") or []
-    if getattr(args, "repo_config", None):
-        repo_config_path = args.repo_config
-    else:
-        repo_config_path = str(Path(repo_root) / REPO_CONFIG_PATH)
-    try:
-        if repo_exceptions:
-            validate_repo_exceptions(repo_exceptions, repo_config_path)
-            print(
-                f"  Loaded {len(repo_exceptions)} per-repo exception(s) "
-                f"from {REPO_CONFIG_PATH}",
-                file=sys.stderr,
-            )
-            exceptions = exceptions + repo_exceptions
-    except ValueError as exc:
-        error_result = RuleResult(
-            rule="repo-exceptions-validation", passed=False
-        )
-        error_result.findings.append(Finding(
-            severity="blocker",
-            file=repo_config_path,
-            line=0,
-            image="",
-            message=f"Invalid per-repo exceptions: {exc}",
-        ))
-        return exceptions, error_result
 
     return exceptions, None
 
@@ -642,10 +556,6 @@ def _run(args, operator_path):
         manifest, manifest_env_vars = load_manifest(operator_path)
         _tlog("load_manifest", time.monotonic() - t0)
 
-    if getattr(args, "repo_config", None):
-        repo_config = load_config_file(Path(args.repo_config))
-    else:
-        repo_config = load_repo_config(Path(repo_root))
 
     prod_scope = None
     if not getattr(args, "no_production_scope", False):
@@ -664,14 +574,6 @@ def _run(args, operator_path):
                         file=sys.stderr,
                     )
             if hasattr(op_manifest_mod, "parse_component_overlay_paths"):
-                repo_config_overlays = repo_config.get("kustomize_overlays") if repo_config else None
-                if repo_config_overlays:
-                    overlay_paths = repo_config_overlays
-                    print(
-                        f"  Overlay paths (from repo config): {overlay_paths}",
-                        file=sys.stderr,
-                    )
-                else:
                     key_map = op_manifest_mod.parse_repo_component_key(operator_path)
                     component_key = key_map.get(repo_basename)
                     if component_key:
@@ -731,7 +633,7 @@ def _run(args, operator_path):
         _tlog(f"rule {key}", time.monotonic() - t0)
         results.append(result)
 
-    exceptions, error_result = _load_all_exceptions(args, repo_root, repo_config)
+    exceptions, error_result = _load_central_exceptions(args)
     if error_result:
         results.insert(0, error_result)
     if exceptions:

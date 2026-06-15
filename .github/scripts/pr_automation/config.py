@@ -39,13 +39,6 @@ class AutomationConfig:
             print(f"Warning: Could not load repository configuration: {e}")
             return set()
 
-
     def get_workflow_template_path(self) -> Path:
         """Get path to workflow template."""
         return Path(f"{self.repo_root}/.github/templates/workflow.yml")
-
-    def get_config_template_path(self) -> Path:
-        """Get path to config template."""
-        return Path(f"{self.repo_root}/.github/templates/config.yaml")
-
-

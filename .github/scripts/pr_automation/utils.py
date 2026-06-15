@@ -16,10 +16,6 @@ RATE_LIMIT_CHECK_INTERVAL = 5      # Check rate limit every N successful operati
 MAX_RETRIES = 3                    # Maximum retry attempts for GitHub API calls
 RETRY_BASE_DELAY = 1               # Base delay between retries (seconds)
 
-# File operation constants
-FILE_OP_CREATE = "create"
-FILE_OP_UPDATE = "update"
-
 # State management operation constants
 OP_CHECK = 'check'
 OP_MARK_CHECKED = 'mark_checked'

@@ -3,27 +3,11 @@
 from pathlib import Path
 
 from rules.python_imports import (
-    load_known_mirrors, check_requirements_file, check_runtime_pip_installs,
+    check_requirements_file, check_runtime_pip_installs,
     run, KNOWN_BUNDLED,
 )
 
 
-class TestLoadKnownMirrors:
-    def test_empty_config(self):
-        assert load_known_mirrors({}) == set()
-
-    def test_valid_config(self):
-        config = {"known_mirrors": {"bundled_packages": ["my-custom-pkg", "another-pkg"]}}
-        result = load_known_mirrors(config)
-        assert result == {"my-custom-pkg", "another-pkg"}
-
-    def test_no_known_mirrors_key(self):
-        config = {"kustomize_overlays": ["config/overlays/odh"]}
-        assert load_known_mirrors(config) == set()
-
-    def test_no_bundled_packages(self):
-        config = {"known_mirrors": {"pypi_mirrors": ["https://pypi.example.com"]}}
-        assert load_known_mirrors(config) == set()
 
 
 class TestCheckRequirementsFile:
@@ -201,20 +185,6 @@ class TestRun:
         result = run(str(tmp_path))
         assert result.passed is True
 
-    def test_known_mirrors_config_loaded(self, tmp_path):
-        config_dir = tmp_path / ".disconnected-readiness"
-        config_dir.mkdir()
-        config = config_dir / "config.yaml"
-        config.write_text(
-            "known_mirrors:\n"
-            "  bundled_packages:\n"
-            "    - my-custom-pkg\n"
-        )
-        req = tmp_path / "requirements.txt"
-        req.write_text("my-custom-pkg==1.0\n")
-        result = run(str(tmp_path))
-        unknown_findings = [f for f in result.findings if "not in known" in f.message]
-        assert unknown_findings == []
 
     def test_nested_requirements_found(self, tmp_path):
         sub = tmp_path / "subdir"

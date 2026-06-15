@@ -13,14 +13,14 @@ import tempfile
 from pathlib import Path
 
 try:
-    from rules.common import Finding, RuleResult, SKIP_DIRS, load_repo_config
+    from rules.common import Finding, RuleResult, SKIP_DIRS
 except ModuleNotFoundError:
-    from common import Finding, RuleResult, SKIP_DIRS, load_repo_config
+    from common import Finding, RuleResult, SKIP_DIRS
 
 try:
     from rules.params_env_utils import (
         kustomize_available, kustomize_build, discover_overlays,
-        find_params_env_files, parse_params_env, load_ignore_keys,
+        find_params_env_files, parse_params_env,
         create_probe_overlay, extract_all_images,
         write_probe_params_env,
         extract_configmap_key_refs, extract_kustomize_replacement_keys,
@@ -30,7 +30,7 @@ try:
 except ModuleNotFoundError:
     from params_env_utils import (
         kustomize_available, kustomize_build, discover_overlays,
-        find_params_env_files, parse_params_env, load_ignore_keys,
+        find_params_env_files, parse_params_env,
         create_probe_overlay, extract_all_images,
         write_probe_params_env,
         extract_configmap_key_refs, extract_kustomize_replacement_keys,
@@ -345,10 +345,8 @@ def run(repo_root: str, manifest_env_vars: set[str] | None = None,
         else None
     )
 
-    repo_config = load_repo_config(root)
-    kustomize_overlay_dirs = repo_config.get("kustomize_overlays") or None
-
-    if not kustomize_overlay_dirs and production_scope and production_scope.overlay_paths:
+    kustomize_overlay_dirs = None
+    if production_scope and production_scope.overlay_paths:
         kustomize_overlay_dirs = production_scope.overlay_paths
 
     overlays = discover_overlays(root)
@@ -363,13 +361,8 @@ def run(repo_root: str, manifest_env_vars: set[str] | None = None,
         ))
         return result
 
-    ignored_keys = load_ignore_keys(repo_config)
-    if ignored_keys:
-        result.findings.append(Finding(
-            severity="info", file="", line=0, image="",
-            message=f"{len(ignored_keys)} params.env key(s) excluded via "
-                    f"config: {', '.join(sorted(ignored_keys))}",
-        ))
+    # No keys are ignored anymore since per-repo config is removed
+    ignored_keys: set[str] = set()
 
     all_repo_params: dict[str, str] = {}
     all_manifest_related_vars: set[str] = set()

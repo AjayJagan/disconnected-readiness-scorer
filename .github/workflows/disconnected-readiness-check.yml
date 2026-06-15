@@ -32,7 +32,7 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: opendatahub-io/disconnected-readiness-scorer
-          ref: a03726c8a7dd37b0c27105c2a67395c16c3f74b9 # Pinned to specific commit for deterministic execution
+          ref: 29ae4bc3591a988c6e3f6ec72d0184c0866650fe # Pinned to specific commit for deterministic execution
           path: scorer
 
       - name: Run disconnected readiness check

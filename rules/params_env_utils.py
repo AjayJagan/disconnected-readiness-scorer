@@ -11,7 +11,6 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -167,20 +166,6 @@ def discover_overlays(repo_root: Path) -> List[Path]:
     return overlays
 
 
-def load_ignore_keys(repo_config: dict) -> Set[str]:
-    """Load params_env_ignore keys from unified repo config dict."""
-    keys: Set[str] = set()
-    entries = repo_config.get("params_env_ignore") or []
-    for i, entry in enumerate(entries):
-        if not isinstance(entry, dict):
-            continue
-        if "key" not in entry:
-            print(f"  params_env_ignore entry {i + 1} missing 'key'", file=sys.stderr)
-        elif "reason" not in entry:
-            print(f"  params_env_ignore entry {i + 1} missing 'reason'", file=sys.stderr)
-        else:
-            keys.add(entry["key"])
-    return keys
 
 
 def write_probe_params_env(params_path: Path, dest_path: Path, ignored_keys: Set[str]):
