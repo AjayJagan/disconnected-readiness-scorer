@@ -1,6 +1,13 @@
 name: Disconnected Readiness Summary
 
 on:
+  schedule:
+    - cron: '17 * * * *'
+  push:
+    branches: [main]
+    paths:
+      - 'config/config.yaml'
+      - '.github/config/repositories.yaml'
   workflow_dispatch:
     inputs:
       repo:
@@ -34,7 +41,7 @@ jobs:
       - name: Run batch scorer
         env:
           INPUT_REPO: ${{ inputs.repo }}
-          INPUT_PARALLEL: ${{ inputs.parallel }}
+          INPUT_PARALLEL: ${{ inputs.parallel || '4' }}
         run: |
           set -euo pipefail
           args=(--parallel "$INPUT_PARALLEL" --timing)
