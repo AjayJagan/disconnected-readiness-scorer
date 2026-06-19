@@ -159,7 +159,17 @@ exceptions:
   # (no repo-specific exceptions)
 
   # --- trainer ---
-  # (no repo-specific exceptions)
+  - rule: "*"
+    repo: trainer
+    paths:
+      - "manifests/base/runtimes/**"
+    reason: "Upstream default runtimes — downstream provides its own runtime manifests"
+
+  - rule: "no-image-tags"
+    repo: trainer
+    paths:
+      - "api/python_api/**"
+    reason: "Auto-generated Kubernetes API models with example image strings — not runtime references"
 
   # --- models-as-a-service ---
   # (no repo-specific exceptions)
