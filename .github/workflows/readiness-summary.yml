@@ -47,7 +47,7 @@ jobs:
           INPUT_PARALLEL: ${{ inputs.parallel || '4' }}
         run: |
           set -euo pipefail
-          args=(--parallel "$INPUT_PARALLEL")
+          args=(--parallel "$INPUT_PARALLEL" --verbose)
           if [ -n "$INPUT_REPO" ]; then
             args+=(--repo "$INPUT_REPO")
           fi

@@ -48,17 +48,21 @@ jobs:
         run: |
           cd scorer
 
-          RULES_ARG=()
+          # Build arguments array with rules if specified
+          ARGS=("${{ github.workspace }}" --report json,markdown -o disconnected-report.json disconnected-report.md)
           if [ -n "$INPUT_RULES" ]; then
             RULES_ARG=(--rules "$INPUT_RULES")
           fi
 
-          uv run main.py "${{ github.workspace }}" --report json -o disconnected-report.json "${RULES_ARG[@]}"
+          # Run analysis and capture JSON output
+          uv run python3 main.py "${ARGS[@]}"
 
       - name: Store results as artifact
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: disconnected-readiness-report
-          path: scorer/disconnected-report.json
+          path: |
+            scorer/disconnected-report.json
+            scorer/disconnected-report.md
           retention-days: 1
