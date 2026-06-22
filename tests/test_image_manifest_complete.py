@@ -149,11 +149,11 @@ class TestScanForImageRefs:
         assert len(refs) == 1
         assert refs[0][2] == "quay.io/org/img:v1"
 
-    def test_finds_from_in_dockerfile(self, tmp_path):
+    def test_skips_dockerfile(self, tmp_path):
         f = tmp_path / "Dockerfile"
         f.write_text("FROM quay.io/org/base:latest")
         refs = scan_for_image_refs(tmp_path)
-        assert len(refs) == 1
+        assert len(refs) == 0
 
     def test_skips_git_dir(self, tmp_path):
         git = tmp_path / ".git"

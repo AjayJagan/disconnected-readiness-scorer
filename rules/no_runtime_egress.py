@@ -2,17 +2,18 @@
 """Detect outbound HTTP calls in runtime code that would fail disconnected."""
 
 import re
+import sys
 from pathlib import Path
 
 try:
     from rules.common import (
         Finding, RuleResult, get_tracked_files, is_file_in_production_scope,
-        SKIP_DIRS,
+        SKIP_DIRS, production_scope_relative_dirs,
     )
 except ModuleNotFoundError:
     from common import (
         Finding, RuleResult, get_tracked_files, is_file_in_production_scope,
-        SKIP_DIRS,
+        SKIP_DIRS, production_scope_relative_dirs,
     )
 
 EGRESS_PATTERNS = {
@@ -29,11 +30,11 @@ EGRESS_PATTERNS = {
         (re.compile(r'aiohttp\.ClientSession\s*\('), "aiohttp session", False),
         (re.compile(r'subprocess.*(?:curl|wget)'), "curl/wget via subprocess", False),
         (re.compile(r'subprocess.*(?:hf|huggingface.cli).*download'), "HuggingFace download via subprocess", True),
-        (re.compile(r'\bfrom_pretrained\s*\('), "HuggingFace from_pretrained() model download", False),
-        (re.compile(r'\bsnapshot_download\s*\('), "HuggingFace snapshot_download() model download", False),
-        (re.compile(r'\bload_dataset\s*\('), "HuggingFace load_dataset() download", False),
-        (re.compile(r'\bSentenceTransformer\s*\('), "SentenceTransformer model load", False),
-        (re.compile(r'\btorch\.hub\.load\s*\('), "torch.hub.load() model download", False),
+        (re.compile(r'\bfrom_pretrained\s*\('), "HuggingFace from_pretrained() model download", True),
+        (re.compile(r'\bsnapshot_download\s*\('), "HuggingFace snapshot_download() model download", True),
+        (re.compile(r'\bload_dataset\s*\('), "HuggingFace load_dataset() download", True),
+        (re.compile(r'\bSentenceTransformer\s*\('), "SentenceTransformer model load", True),
+        (re.compile(r'\btorch\.hub\.load\s*\('), "torch.hub.load() model download", True),
     ],
     ".ts": [
         (re.compile(r'fetch\s*\('), "fetch() call", False),
@@ -74,19 +75,30 @@ def run(repo_root: str, production_scope=None, **_kwargs) -> RuleResult:
         return _run_impl(root, result, production_scope)
     except Exception as exc:
         import traceback
+        print(traceback.format_exc(), file=sys.stderr)
         result.passed = False
         result.findings.append(Finding(
             severity="blocker",
             file="",
             line=0,
             image="",
-            message=f"Rule crashed: {exc}\n{traceback.format_exc()}",
+            message=f"Rule crashed: {type(exc).__name__}: {exc}",
         ))
         return result
 
 
 def _run_impl(root: Path, result: RuleResult, production_scope) -> RuleResult:
     tracked = get_tracked_files(root)
+
+    result.scan_filters = {
+        "globs": ["**/*"],
+        "extensions": sorted(EGRESS_PATTERNS.keys()),
+        "skip_dirs": sorted(SKIP_DIRS),
+        "tracked_files_only": tracked is not None,
+    }
+    prod_dirs = production_scope_relative_dirs(production_scope, root)
+    if prod_dirs is not None:
+        result.scan_filters["production_scope_dirs"] = prod_dirs
 
     for filepath in root.rglob("*"):
         if tracked is not None and filepath.resolve() not in tracked:

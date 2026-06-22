@@ -525,7 +525,7 @@ class TestExtractProductionSources:
             "path": "Dockerfile",
             "copy_instructions": [{"original_sources": ["src"]}],
         }]}
-        dirs, files, _, _ = _extract_production_sources_from_arch_data(arch_data, tmp_path)
+        dirs, _, _, _ = _extract_production_sources_from_arch_data(arch_data, tmp_path)
         assert src.resolve() in dirs
 
     def test_literal_source_file(self, tmp_path):
@@ -535,7 +535,7 @@ class TestExtractProductionSources:
             "path": "Dockerfile",
             "copy_instructions": [{"original_sources": ["go.mod"]}],
         }]}
-        dirs, files, _, _ = _extract_production_sources_from_arch_data(arch_data, tmp_path)
+        _, files, _, _ = _extract_production_sources_from_arch_data(arch_data, tmp_path)
         assert f.resolve() in files
 
     def test_manifest_hint_dir(self, tmp_path):
@@ -552,7 +552,8 @@ class TestExtractProductionSources:
         assert cfg.resolve() in m_dirs
         assert "config" in m_folders
 
-    def test_entry_points_take_priority(self, tmp_path):
+    def test_entry_points_and_copy_sources_both_included(self, tmp_path):
+        """Entry points and COPY sources are both included in production scope."""
         src = tmp_path / "src"
         src.mkdir()
         cmd = tmp_path / "cmd"
@@ -564,7 +565,7 @@ class TestExtractProductionSources:
         }]}
         dirs, _, _, _ = _extract_production_sources_from_arch_data(arch_data, tmp_path)
         assert cmd.resolve() in dirs
-        assert src.resolve() not in dirs
+        assert src.resolve() in dirs
 
     def test_root_source_with_docker_context(self, tmp_path):
         app = tmp_path / "app"
@@ -595,7 +596,7 @@ class TestExtractProductionSources:
         arch_data = {"dockerfiles": [{
             "path": "Dockerfile",
         }]}
-        dirs, files, m_dirs, m_folders = _extract_production_sources_from_arch_data(
+        dirs, files, _, _ = _extract_production_sources_from_arch_data(
             arch_data, tmp_path
         )
         assert dirs == set()

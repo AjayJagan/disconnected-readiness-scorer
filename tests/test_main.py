@@ -35,6 +35,25 @@ def load_exceptions(path):
     return load_central_config(path)["exceptions"]
 
 
+def _make_import_side_effect(fake_mod):
+    """Return an importlib.import_module side_effect that is module-aware.
+
+    Returns *fake_mod* for rule modules but a proper mock with
+    parse_manifest_entries / parse_overlay_paths_from_arch_data for
+    ``rules.operator_manifest`` so production-scope code works.
+    """
+    op_manifest_mock = MagicMock()
+    op_manifest_mock.parse_manifest_entries.return_value = ({}, {})
+    op_manifest_mock.parse_overlay_paths_from_arch_data.return_value = []
+
+    def _side_effect(name):
+        if name == "rules.operator_manifest":
+            return op_manifest_mock
+        return fake_mod
+
+    return _side_effect
+
+
 # --- parse_args ---
 
 class TestParseArgs:
@@ -315,7 +334,7 @@ class TestMain:
         fake_mod.detect_image_pattern.return_value = "static_csv"
 
         with patch("main._run_arch_analyzer", return_value=None), \
-             patch("importlib.import_module", return_value=fake_mod):
+             patch("importlib.import_module", side_effect=_make_import_side_effect(fake_mod)):
             exit_code = main([".", "--rules", "csv,tags,egress,python", "--report", "json"])
         assert exit_code == 0
 
@@ -329,7 +348,7 @@ class TestMain:
         fake_mod.detect_image_pattern.return_value = "static_csv"
 
         with patch("main._run_arch_analyzer", return_value=None), \
-             patch("importlib.import_module", return_value=fake_mod):
+             patch("importlib.import_module", side_effect=_make_import_side_effect(fake_mod)):
             exit_code = main([".", "--rules", "csv", "--report", "json"])
         assert exit_code == 1
 
@@ -341,7 +360,7 @@ class TestMain:
 
         out_file = tmp_path / "report.json"
         with patch("main._run_arch_analyzer", return_value=None), \
-             patch("importlib.import_module", return_value=fake_mod):
+             patch("importlib.import_module", side_effect=_make_import_side_effect(fake_mod)):
             exit_code = main([".", "--rules", "csv", "--report", "json", "-o", str(out_file)])
         assert exit_code == 0
         content = out_file.read_text()
@@ -351,12 +370,12 @@ class TestMain:
     @patch("main.compute_production_scope", return_value=None)
     def test_manifest_rule_triggers_adapt(self, _mock_scope):
         fake_manifest = FakeManifest(images=[], components=[], known_issues=[])
+        fake_mod = MagicMock()
 
         with patch("main._run_arch_analyzer", return_value=None), \
              patch("main.load_manifest", return_value=(fake_manifest, set())) as mock_load, \
              patch("main.adapt_manifest_result", return_value=RuleResult(rule="operator-manifest")) as mock_adapt, \
-             patch("importlib.import_module") as mock_import:
-            mock_import.return_value = MagicMock()
+             patch("importlib.import_module", side_effect=_make_import_side_effect(fake_mod)):
             exit_code = main([".", "--rules", "manifest", "--report", "json"])
             assert exit_code == 0
             mock_load.assert_called_once()
@@ -372,7 +391,7 @@ class TestMain:
 
         with patch("main._run_arch_analyzer", return_value=None), \
              patch("main.load_manifest", return_value=(fake_manifest, set())) as mock_load, \
-             patch("importlib.import_module", return_value=fake_mod):
+             patch("importlib.import_module", side_effect=_make_import_side_effect(fake_mod)):
             exit_code = main([".", "--rules", "csv", "--report", "json"])
             assert exit_code == 0
             mock_load.assert_called_once()
@@ -817,11 +836,12 @@ class TestValidateConfigSchema:
 
 
 class TestRunArchAnalyzer:
-    def test_reuses_existing_json(self, tmp_path):
-        data = {"dockerfiles": []}
-        (tmp_path / "component-architecture.json").write_text(json.dumps(data))
-        result = _run_arch_analyzer("nonexistent-bin", str(tmp_path))
-        assert result == data
+    def test_deletes_existing_json_before_run(self, tmp_path, monkeypatch):
+        """Pre-existing JSON is deleted (supply chain safety), binary must exist."""
+        (tmp_path / "component-architecture.json").write_text('{"old": true}')
+        with pytest.raises(ArchAnalyzerError, match="not found"):
+            _run_arch_analyzer("nonexistent-bin", str(tmp_path))
+        assert not (tmp_path / "component-architecture.json").exists()
 
     def test_binary_not_found_raises(self, tmp_path):
         with pytest.raises(ArchAnalyzerError, match="not found"):
@@ -856,10 +876,16 @@ class TestRunArchAnalyzer:
         with pytest.raises(ArchAnalyzerError, match="did not generate"):
             _run_arch_analyzer(str(bin_path), str(tmp_path))
 
-    def test_invalid_json_raises(self, tmp_path):
-        (tmp_path / "component-architecture.json").write_text("not json{{{")
+    def test_invalid_json_raises(self, tmp_path, monkeypatch):
+        bin_path = tmp_path / "fake-bin"
+        bin_path.touch()
+
+        def fake_run(*args, **kwargs):
+            (tmp_path / "component-architecture.json").write_text("not json{{{")
+
+        monkeypatch.setattr("main.subprocess.run", fake_run)
         with pytest.raises(ArchAnalyzerError, match="Failed to parse"):
-            _run_arch_analyzer("any", str(tmp_path))
+            _run_arch_analyzer(str(bin_path), str(tmp_path))
 
 
 class TestApplyExceptionsHits:

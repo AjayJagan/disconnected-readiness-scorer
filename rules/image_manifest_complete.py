@@ -21,13 +21,13 @@ try:
     from rules.common import (
         Finding, RuleResult, get_tracked_files, is_file_in_production_scope,
         SKIP_DIRS, find_params_env_dirs, build_overlay_file_map,
-        is_non_production_overlay_file,
+        is_non_production_overlay_file, production_scope_relative_dirs,
     )
 except ModuleNotFoundError:
     from common import (
         Finding, RuleResult, get_tracked_files, is_file_in_production_scope,
         SKIP_DIRS, find_params_env_dirs, build_overlay_file_map,
-        is_non_production_overlay_file,
+        is_non_production_overlay_file, production_scope_relative_dirs,
     )
 
 IMAGE_REF_PATTERN = re.compile(
@@ -188,8 +188,6 @@ def normalize_image(ref: str) -> str:
 
 
 
-
-
 def scan_for_image_refs(
     repo_root: Path,
     tracked: set[Path] | None = None,
@@ -197,10 +195,26 @@ def scan_for_image_refs(
     files_checked: list[str] | None = None,
     production_scope=None,
     non_image_prefixes: list[str] | None = None,
+    scan_filters: dict | None = None,
 ) -> list[tuple[Path, int, str]]:
     """Scan source files for container image references."""
     extensions = {".go", ".py", ".yaml", ".yml", ".json", ".sh"}
     results = []
+
+    if scan_filters is not None:
+        scan_filters["globs"] = ["**/*"]
+        scan_filters["extensions"] = sorted(extensions)
+        scan_filters["skip_dirs"] = sorted(SKIP_DIRS)
+        scan_filters["tracked_files_only"] = tracked is not None
+        prod_dirs = production_scope_relative_dirs(production_scope, repo_root)
+        if prod_dirs is not None:
+            scan_filters["production_scope_dirs"] = prod_dirs
+        if params_env_dirs:
+            scan_filters["params_env_dirs_excluded"] = sorted(
+                str(d.relative_to(repo_root.resolve())) + "/"
+                for d in params_env_dirs
+                if d.is_relative_to(repo_root.resolve())
+            )
 
     for filepath in repo_root.rglob("*"):
         if tracked is not None and filepath.resolve() not in tracked:
@@ -209,7 +223,7 @@ def scan_for_image_refs(
             continue
         if params_env_dirs and any(filepath.resolve().is_relative_to(d) for d in params_env_dirs):
             continue
-        if filepath.suffix not in extensions and filepath.name != "Dockerfile":
+        if filepath.suffix not in extensions:
             continue
         if is_file_in_production_scope(filepath, production_scope) is False:
             continue
@@ -285,7 +299,7 @@ def check_env_var_pattern(
         ))
 
     pe_dirs = find_params_env_dirs(repo_root)
-    image_refs = scan_for_image_refs(repo_root, tracked=tracked, params_env_dirs=pe_dirs, files_checked=result.files_checked, production_scope=production_scope, non_image_prefixes=non_image_prefixes)
+    image_refs = scan_for_image_refs(repo_root, tracked=tracked, params_env_dirs=pe_dirs, files_checked=result.files_checked, production_scope=production_scope, non_image_prefixes=non_image_prefixes, scan_filters=result.scan_filters)
     file_lines_cache: dict[Path, list[str]] = {}
 
     dirs_with_refs: set[Path] = set()
@@ -438,7 +452,7 @@ def check_static_csv_pattern(
         ))
 
     pe_dirs = find_params_env_dirs(repo_root)
-    image_refs = scan_for_image_refs(repo_root, tracked=tracked, params_env_dirs=pe_dirs, files_checked=result.files_checked, production_scope=production_scope, non_image_prefixes=non_image_prefixes)
+    image_refs = scan_for_image_refs(repo_root, tracked=tracked, params_env_dirs=pe_dirs, files_checked=result.files_checked, production_scope=production_scope, non_image_prefixes=non_image_prefixes, scan_filters=result.scan_filters)
 
     for filepath, line_num, image in image_refs:
         normalized = normalize_image(image)
@@ -489,7 +503,7 @@ def check_unmanaged_images(
     ))
 
     pe_dirs = find_params_env_dirs(repo_root)
-    image_refs = scan_for_image_refs(repo_root, tracked=tracked, params_env_dirs=pe_dirs, files_checked=result.files_checked, production_scope=production_scope, non_image_prefixes=non_image_prefixes)
+    image_refs = scan_for_image_refs(repo_root, tracked=tracked, params_env_dirs=pe_dirs, files_checked=result.files_checked, production_scope=production_scope, non_image_prefixes=non_image_prefixes, scan_filters=result.scan_filters)
 
     for filepath, line_num, image in image_refs:
         relative = str(filepath.relative_to(repo_root))

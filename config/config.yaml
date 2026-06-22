@@ -122,15 +122,10 @@ exceptions:
       - "**/contract-tests/**"
       - "**/recordings/**"
       - "**/*.snap.json"
-      - "distributions/rhaii/developing/**"
     reason: "Frontend test infrastructure — not deployed in production"
 
   # --- kubeflow ---
-  - rule: "*"
-    repo: kubeflow
-    paths:
-      - "**/config/development/**"
-    reason: "Development config"
+  # (no repo-specific exceptions)
 
   # --- notebooks ---
   # (no repo-specific exceptions)
@@ -207,4 +202,5 @@ exceptions:
       - "config/**"
     images:
       - REPLACE_IMAGE:v0.0.0-placeholder
+      - REPLACE_IMAGE:v0.0.0-rhoai-placeholder
     reason: "Test kustomize overlays — not deployed in production"

@@ -249,7 +249,7 @@ The rule maintains a hardcoded set of ~30 packages known to be commonly bundled 
 
 Validates the full wiring chain for repos that use the `params.env` + kustomize pattern to manage container images:
 
-```
+```text
 params.env → kustomize configMap → rendered manifest → Go os.Getenv
 ```
 
@@ -425,7 +425,7 @@ Default rules: all except `manifest`. The `manifest` rule must be explicitly sel
 
 ### Execution sequence
 
-```
+```text
 1. Parse CLI arguments
 2. Load central config (config/config.yaml)
    └─ Validate against JSON schema (schemas/config.schema.json)
@@ -462,7 +462,7 @@ Default rules: all except `manifest`. The `manifest` rule must be explicitly sel
 
 ### Cross-rule data flow
 
-```
+```text
                     opendatahub-operator
                            │
                     operator_manifest.py

@@ -158,11 +158,11 @@ class TestRun:
         result = run(str(tmp_path))
         assert result.findings == []
 
-    def test_dockerfile_skipped(self, tmp_path):
+    def test_dockerfile_scanned(self, tmp_path):
         f = tmp_path / "Dockerfile"
         f.write_text('FROM quay.io/org/base:latest')
         result = run(str(tmp_path))
-        assert result.findings == []
+        assert any(f.file == "Dockerfile" for f in result.findings)
 
     def test_manifest_tag_sets_passed_false(self, tmp_path):
         manifests = tmp_path / "manifests"

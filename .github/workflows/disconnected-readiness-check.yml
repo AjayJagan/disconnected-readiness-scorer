@@ -55,7 +55,7 @@ jobs:
           fi
 
           # Run analysis and capture JSON output
-          uv run python3 main.py "${ARGS[@]}"
+          uv run main.py "${ARGS[@]}"
 
       - name: Store results as artifact
         if: always()

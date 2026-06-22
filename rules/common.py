@@ -19,14 +19,13 @@ class Finding:
     message: str
 
     def __post_init__(self):
-        if isinstance(self.severity, str) and not isinstance(self.severity, Severity):
-            try:
-                self.severity = Severity(self.severity)
-            except ValueError:
-                raise ValueError(
-                    f"Invalid severity '{self.severity}'. "
-                    f"Must be one of: {[s.value for s in Severity]}"
-                )
+        try:
+            self.severity = Severity(self.severity)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Invalid severity '{self.severity}'. "
+                f"Must be one of: {[s.value for s in Severity]}"
+            ) from exc
 
 
 @dataclass
@@ -35,6 +34,7 @@ class RuleResult:
     passed: bool = True
     findings: list[Finding] = field(default_factory=list)
     files_checked: list[str] = field(default_factory=list)
+    scan_filters: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -141,6 +141,19 @@ def is_non_production_overlay_file(
 #   - operator_manifest.py: minimal subset (operator repo has no .tox/.devcontainer)
 #   - production_scope.py: adds testdata/docs (irrelevant for production scope computation)
 SKIP_DIRS = {".git", "vendor", "node_modules", "__pycache__", ".tox", ".devcontainer"}
+
+
+def production_scope_relative_dirs(production_scope: Optional[ProductionScope], repo_root: Path) -> list[str] | None:
+    if production_scope is None or not production_scope.production_dirs:
+        return None
+    resolved_root = repo_root.resolve()
+    dirs = []
+    for d in sorted(production_scope.production_dirs):
+        try:
+            dirs.append(str(d.relative_to(resolved_root)) + "/")
+        except ValueError:
+            continue
+    return dirs if dirs else None
 
 
 def find_params_env_dirs(root: Path) -> set[Path]:

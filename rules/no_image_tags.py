@@ -9,13 +9,13 @@ try:
     from rules.common import (
         Finding, RuleResult, get_tracked_files, is_file_in_production_scope,
         SKIP_DIRS, find_params_env_dirs, build_overlay_file_map,
-        is_non_production_overlay_file,
+        is_non_production_overlay_file, production_scope_relative_dirs,
     )
 except ModuleNotFoundError:
     from common import (
         Finding, RuleResult, get_tracked_files, is_file_in_production_scope,
         SKIP_DIRS, find_params_env_dirs, build_overlay_file_map,
-        is_non_production_overlay_file,
+        is_non_production_overlay_file, production_scope_relative_dirs,
     )
 
 IMAGE_REF_PATTERN = re.compile(
@@ -31,6 +31,8 @@ K8S_UNQUALIFIED_IMAGE = re.compile(
 YAML_EXTENSIONS = {".yaml", ".yml"}
 
 SOURCE_EXTENSIONS = {".go", ".py", ".ts", ".tsx", ".sh"}
+
+_NAME_CONTAINS = ["Dockerfile"]
 
 _SKIP_FILENAMES = {
     "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
@@ -192,10 +194,28 @@ def run(repo_root: str, production_scope=None, arch_data: dict | None = None, no
     tracked = get_tracked_files(root)
     overlay_file_map = build_overlay_file_map(arch_data, root)
 
+    result.scan_filters = {
+        "globs": ["**/*"],
+        "extensions": sorted(extensions),
+        "name_contains": _NAME_CONTAINS,
+        "skip_dirs": sorted(skip_dirs),
+        "skip_filenames": sorted(_SKIP_FILENAMES),
+        "tracked_files_only": tracked is not None,
+    }
+    prod_dirs = production_scope_relative_dirs(production_scope, root)
+    if prod_dirs is not None:
+        result.scan_filters["production_scope_dirs"] = prod_dirs
+    if params_env_dirs:
+        result.scan_filters["params_env_dirs_excluded"] = sorted(
+            str(d.relative_to(root.resolve())) + "/"
+            for d in params_env_dirs
+            if d.is_relative_to(root.resolve())
+        )
+
     for filepath in root.rglob("*"):
         if filepath.name in _SKIP_FILENAMES:
             continue
-        if filepath.suffix not in extensions:
+        if filepath.suffix not in extensions and not any(s in filepath.name for s in _NAME_CONTAINS):
             continue
         if any(d in filepath.parts for d in skip_dirs):
             continue

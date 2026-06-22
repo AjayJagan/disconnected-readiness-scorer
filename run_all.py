@@ -20,7 +20,6 @@ import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from contextlib import redirect_stdout, redirect_stderr
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -346,28 +345,30 @@ def main(argv=None):
         )
 
         log_lines = [f"[{i}/{total}] {org}/{repo}"]
-        stderr_capture = io.StringIO()
+        log_capture = io.StringIO()
         t1 = time.monotonic()
 
         try:
-            with redirect_stderr(stderr_capture):
-                rc = _run(
-                    scorer_args, operator_path,
-                    manifest=manifest,
-                    manifest_env_vars=manifest_env_vars,
-                    operator_arch_data=operator_arch_data,
-                )
+            rc = _run(
+                scorer_args, operator_path,
+                manifest=manifest,
+                manifest_env_vars=manifest_env_vars,
+                operator_arch_data=operator_arch_data,
+                log_stream=log_capture,
+            )
         except SystemExit as e:
             rc = e.code if isinstance(e.code, int) else 1
         except Exception as e:
+            import traceback
             rc = 1
-            print(f"    ERROR: {e}", file=sys.stderr)
+            log_capture.write(f"    ERROR ({type(e).__name__}): {e}\n")
+            log_capture.write(traceback.format_exc())
 
         elapsed = time.monotonic() - t1
 
-        stderr_text = stderr_capture.getvalue().strip()
-        if stderr_text:
-            for line in stderr_text.splitlines():
+        log_text = log_capture.getvalue().strip()
+        if log_text:
+            for line in log_text.splitlines():
                 log_lines.append(f"    {line}")
 
         status = "OK" if rc == 0 else "NOT READY"

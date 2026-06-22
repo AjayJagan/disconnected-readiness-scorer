@@ -243,7 +243,7 @@ def _go_list_production_dirs(module_dir: Path) -> set[Path]:
             if pkg_dir:
                 dirs.add(Path(pkg_dir).resolve())
         return dirs
-    except Exception:
+    except (subprocess.SubprocessError, json.JSONDecodeError, OSError, KeyError):
         return set()
 
 
@@ -266,7 +266,7 @@ def _is_js_monorepo(repo_root: Path) -> bool:
     try:
         data = json.loads(pkg_json.read_text())
         return bool(data.get("workspaces"))
-    except Exception:
+    except (OSError, json.JSONDecodeError):
         return False
 
 
@@ -295,28 +295,28 @@ def _extract_production_sources_from_arch_data(
     js_monorepo = _is_js_monorepo(repo_root)
     docker_contexts = docker_contexts or {}
 
+    def _inside_repo(path: Path) -> bool:
+        try:
+            path.resolve().relative_to(resolved_root)
+            return True
+        except ValueError:
+            return False
+
     for dockerfile in arch_data.get("dockerfiles", []):
         dockerfile_path = dockerfile.get("path", "")
         dockerfile_dir = (repo_root / dockerfile_path).parent
 
-        # Try build_commands entry_points first (arch-analyzer may provide these)
-        entry_points = []
+        # Add build_commands entry_points as additional production sources
         for bc in dockerfile.get("build_commands", []):
             ep = bc.get("entry_point", "")
             if ep:
-                entry_points.append(ep)
-
-        resolved_entry_points = False
-        if entry_points:
-            for ep in entry_points:
                 ep_path = repo_root / ep.strip("./")
+                if not _inside_repo(ep_path):
+                    continue
                 if ep_path.is_dir():
                     production_dirs.add(ep_path.resolve())
-                    resolved_entry_points = True
                 elif ep_path.is_file():
                     production_files.add(ep_path.resolve())
-                    resolved_entry_points = True
-        has_entry_points = resolved_entry_points
 
         # Collect all original_sources across all copy instructions for this Dockerfile
         all_sources: list[str] = [
@@ -335,13 +335,15 @@ def _extract_production_sources_from_arch_data(
                 # Case 1: source contains ** or ${VAR} — resolve via glob
                 if _is_glob_source(source_stripped):
                     for match in _glob_source(source_stripped, repo_root, resolved_root):
+                        if not _inside_repo(match):
+                            continue
                         resolved = match.resolve()
                         if is_manifest:
                             if match.is_dir():
                                 manifest_dirs.add(resolved)
                                 if match.parent.resolve() == resolved_root:
                                     manifest_source_folders.append(match.name)
-                        elif not has_entry_points:
+                        else:
                             if match.is_dir():
                                 production_dirs.add(resolved)
                             elif match.is_file():
@@ -352,13 +354,10 @@ def _extract_production_sources_from_arch_data(
 
                 # Case 2: source resolves to repo_root — apply scoping heuristics
                 if source_path.resolve() == resolved_root and not is_manifest:
-                    if has_entry_points:
-                        continue
-
                     # Config override: explicit context for this Dockerfile
                     if dockerfile_path in docker_contexts:
                         ctx_dir = repo_root / docker_contexts[dockerfile_path]
-                        if ctx_dir.is_dir():
+                        if ctx_dir.is_dir() and _inside_repo(ctx_dir):
                             production_dirs.add(ctx_dir.resolve())
                         continue
 
@@ -366,17 +365,21 @@ def _extract_production_sources_from_arch_data(
                     go_module_dir = _find_go_module_dir(all_sources, repo_root)
                     if go_module_dir:
                         go_dirs = _go_list_production_dirs(go_module_dir)
-                        production_dirs.update(go_dirs)
+                        production_dirs.update(
+                            d for d in go_dirs if _inside_repo(d)
+                        )
                         continue
 
                     # Heuristic B: JS monorepo → nearest package.json
                     if js_monorepo:
                         pkg_dir = _nearest_package_json_dir(dockerfile_dir, repo_root)
-                        if pkg_dir.resolve() != resolved_root:
+                        if pkg_dir.resolve() != resolved_root and _inside_repo(pkg_dir):
                             production_dirs.add(pkg_dir.resolve())
                     continue
 
                 # Case 3: literal path
+                if not _inside_repo(source_path):
+                    continue
                 if source_path.is_dir():
                     resolved = source_path.resolve()
                     if resolved == resolved_root:
@@ -385,13 +388,13 @@ def _extract_production_sources_from_arch_data(
                         manifest_dirs.add(resolved)
                         if source_path.parent.resolve() == resolved_root:
                             manifest_source_folders.append(source_path.name)
-                    elif not has_entry_points:
+                    else:
                         production_dirs.add(resolved)
                 elif source_path.is_file():
                     resolved = source_path.resolve()
                     if is_manifest:
                         manifest_dirs.add(source_path.parent.resolve())
-                    elif not has_entry_points:
+                    else:
                         production_files.add(resolved)
 
     manifest_source_folders = sorted(set(manifest_source_folders))
@@ -434,7 +437,9 @@ def compute_production_scope(
     # --- arch-analyzer original_sources ---
     if arch_data:
         arch_prod_dirs, arch_prod_files, arch_manifest_dirs, arch_manifest_folders = (
-            _extract_production_sources_from_arch_data(arch_data, repo_root, docker_contexts=docker_contexts)
+            _extract_production_sources_from_arch_data(
+                arch_data, repo_root, docker_contexts=docker_contexts,
+            )
         )
         if arch_prod_dirs or arch_prod_files:
             production_dirs = arch_prod_dirs or None
