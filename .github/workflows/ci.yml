@@ -9,32 +9,29 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.9", "3.12"]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Set up Python ${{ matrix.python-version }}
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+
+      - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version-file: ".python-version"
 
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install pytest pytest-cov pyyaml jinja2
+        run: uv sync --frozen --extra dev
 
       - name: Run tests with coverage
         run: |
           if [ -d tests ]; then
-            python -m pytest tests/ -v --cov=. --cov-report=xml --cov-report=term --junitxml=junit.xml
+            uv run python -m pytest tests/ -v --cov=. --cov-report=xml --cov-report=term --junitxml=junit.xml
           else
             echo "No tests directory found, skipping"
           fi
 
       - name: Upload coverage to Codecov
-        if: matrix.python-version == '3.12'
         uses: codecov/codecov-action@e79a6962e0d4c0c17b229090214935d2e33f8354 # v6.0.1
         with:
           files: coverage.xml

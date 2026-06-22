@@ -442,8 +442,12 @@ Current coverage: 7/10 issues detected, 3 gaps identified (params.env exclusion 
 
 ### Dependencies
 
+Dependencies are managed with [uv](https://docs.astral.sh/uv/). Install it first.
+
+Then install all dev dependencies:
+
 ```bash
-pip install pytest pytest-cov pyyaml jinja2
+uv sync --extra dev
 ```
 
 `pyyaml` is required. `jinja2` is optional at runtime (report rendering degrades gracefully) but required for full test coverage.
@@ -451,13 +455,13 @@ pip install pytest pytest-cov pyyaml jinja2
 ### Running tests
 
 ```bash
-python -m pytest tests/ -v                                 # all tests
-python -m pytest tests/test_image_manifest_complete.py -v  # single file
-python -m pytest tests/test_main.py::TestParseArgs -v      # single class
-python -m pytest tests/ -v --cov=. --cov-report=term       # with coverage
+uv run python -m pytest tests/ -v                                 # all tests
+uv run python -m pytest tests/test_image_manifest_complete.py -v  # single file
+uv run python -m pytest tests/test_main.py::TestParseArgs -v      # single class
+uv run python -m pytest tests/ -v --cov=. --cov-report=term       # with coverage
 ```
 
-CI runs on Python 3.9 and 3.12. Codecov enforces 80% patch coverage.
+CI runs on Python 3.12. Codecov enforces 80% patch coverage.
 
 ## License
 
