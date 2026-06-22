@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
-from rules.common import RuleResult
+from rules.common import ArchAnalyzerResult, RuleResult
 from rules.operator_manifest import (
     clone_operator, parse_component_images, parse_known_issues,
     build_manifest, run, COMPONENTS_PATH,
@@ -251,60 +251,60 @@ class TestRun:
 
 class TestParseOverlayPathsFromArchData:
     def test_basic_overlays(self):
-        arch_data = {
+        arch_data = ArchAnalyzerResult.from_dict({
             "kustomize_components": [{
                 "support_file": "internal/controller/components/kserve/kserve_support.go",
                 "overlay_paths": ["overlays/odh"],
             }]
-        }
+        })
         result = parse_overlay_paths_from_arch_data(arch_data, "kserve")
         assert result == ["overlays/odh"]
 
     def test_multiple_overlays(self):
-        arch_data = {
+        arch_data = ArchAnalyzerResult.from_dict({
             "kustomize_components": [{
                 "support_file": "internal/controller/components/dashboard/dashboard_support.go",
                 "overlay_paths": ["overlays/rhoai", "overlays/odh"],
             }]
-        }
+        })
         result = parse_overlay_paths_from_arch_data(arch_data, "dashboard")
         assert result == ["overlays/rhoai", "overlays/odh"]
 
     def test_component_dir_map(self):
-        arch_data = {
+        arch_data = ArchAnalyzerResult.from_dict({
             "kustomize_components": [{
                 "support_file": "internal/controller/components/modelsasservice/maas_support.go",
                 "overlay_paths": ["overlays/odh"],
             }]
-        }
+        })
         result = parse_overlay_paths_from_arch_data(arch_data, "maas")
         assert result == ["overlays/odh"]
 
     def test_component_key_with_slash(self):
-        arch_data = {
+        arch_data = ArchAnalyzerResult.from_dict({
             "kustomize_components": [{
                 "support_file": "internal/controller/components/workbenches/wb_support.go",
                 "overlay_paths": ["overlays/odh"],
             }]
-        }
+        })
         result = parse_overlay_paths_from_arch_data(arch_data, "workbenches/kf-notebook-controller")
         assert result == ["overlays/odh"]
 
     def test_skip_operator_component(self):
-        result = parse_overlay_paths_from_arch_data({}, "operator")
+        result = parse_overlay_paths_from_arch_data(ArchAnalyzerResult(), "operator")
         assert result == []
 
     def test_empty_arch_data(self):
-        result = parse_overlay_paths_from_arch_data({}, "kserve")
+        result = parse_overlay_paths_from_arch_data(ArchAnalyzerResult(), "kserve")
         assert result == []
 
     def test_leading_slash_stripped(self):
-        arch_data = {
+        arch_data = ArchAnalyzerResult.from_dict({
             "kustomize_components": [{
                 "support_file": "internal/controller/components/kserve/kserve_support.go",
                 "overlay_paths": ["/overlays/odh/"],
             }]
-        }
+        })
         result = parse_overlay_paths_from_arch_data(arch_data, "kserve")
         assert result == ["overlays/odh"]
 

@@ -21,7 +21,7 @@ from pathlib import Path
 import jsonschema
 import yaml
 
-from rules.common import Finding, RuleResult
+from rules.common import ArchAnalyzerResult, Finding, RuleResult
 from rules.production_scope import compute_production_scope
 
 SEVERITY_ORDER = {"blocker": 0, "info": 1}
@@ -594,7 +594,7 @@ def _load_all_exceptions(args):
     return central["exceptions"], None
 
 
-def _run_arch_analyzer(arch_analyzer_bin: str, target_dir: str) -> dict:
+def _run_arch_analyzer(arch_analyzer_bin: str, target_dir: str) -> ArchAnalyzerResult:
     """Extract arch-analyzer JSON for a directory.
 
     Always runs arch-analyzer fresh — never trusts pre-existing JSON
@@ -640,7 +640,7 @@ def _run_arch_analyzer(arch_analyzer_bin: str, target_dir: str) -> dict:
 
     try:
         with open(json_path) as f:
-            return json.load(f)
+            return ArchAnalyzerResult.from_dict(json.load(f))
     except (json.JSONDecodeError, OSError) as e:
         raise ArchAnalyzerError(
             f"Failed to parse {json_path}: {e}"

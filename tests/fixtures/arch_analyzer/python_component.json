@@ -1,0 +1,20 @@
+{
+  "dockerfiles": [
+    {
+      "path": "Dockerfile",
+      "copy_instructions": [
+        {
+          "original_sources": ["requirements.txt"],
+          "manifest_hint": false
+        },
+        {
+          "original_sources": ["src"],
+          "manifest_hint": false
+        }
+      ],
+      "build_commands": []
+    }
+  ],
+  "kustomize_overlay_refs": [],
+  "kustomize_components": []
+}

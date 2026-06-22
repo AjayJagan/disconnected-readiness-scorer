@@ -12,9 +12,9 @@ from pathlib import Path
 from typing import Optional
 
 try:
-    from rules.common import ProductionScope
+    from rules.common import ArchAnalyzerResult, ProductionScope
 except (ImportError, ModuleNotFoundError):
-    from common import ProductionScope
+    from common import ArchAnalyzerResult, ProductionScope
 
 # Extended skip set for scope computation — testdata/docs are never production code.
 _SKIP_DIRS = {".git", "vendor", "node_modules", "__pycache__", "testdata", "docs"}
@@ -271,7 +271,7 @@ def _is_js_monorepo(repo_root: Path) -> bool:
 
 
 def _extract_production_sources_from_arch_data(
-    arch_data: dict, repo_root: Path,
+    arch_data: ArchAnalyzerResult, repo_root: Path,
     docker_contexts: Optional[dict] = None,
 ) -> tuple[set[Path], set[Path], set[Path], list[str]]:
     """Extract production sources from arch-analyzer dockerfiles.
@@ -302,15 +302,12 @@ def _extract_production_sources_from_arch_data(
         except ValueError:
             return False
 
-    for dockerfile in arch_data.get("dockerfiles", []):
-        dockerfile_path = dockerfile.get("path", "")
-        dockerfile_dir = (repo_root / dockerfile_path).parent
+    for dockerfile in arch_data.dockerfiles:
+        dockerfile_dir = (repo_root / dockerfile.path).parent
 
-        # Add build_commands entry_points as additional production sources
-        for bc in dockerfile.get("build_commands", []):
-            ep = bc.get("entry_point", "")
-            if ep:
-                ep_path = repo_root / ep.strip("./")
+        for bc in dockerfile.build_commands:
+            if bc.entry_point:
+                ep_path = repo_root / bc.entry_point.strip("./")
                 if not _inside_repo(ep_path):
                     continue
                 if ep_path.is_dir():
@@ -318,18 +315,14 @@ def _extract_production_sources_from_arch_data(
                 elif ep_path.is_file():
                     production_files.add(ep_path.resolve())
 
-        # Collect all original_sources across all copy instructions for this Dockerfile
         all_sources: list[str] = [
             s
-            for ci in dockerfile.get("copy_instructions", [])
-            for s in ci.get("original_sources", [])
+            for ci in dockerfile.copy_instructions
+            for s in ci.original_sources
         ]
 
-        for copy_instr in dockerfile.get("copy_instructions", []):
-            original_sources = copy_instr.get("original_sources", [])
-            is_manifest = copy_instr.get("manifest_hint", False)
-
-            for source in original_sources:
+        for copy_instr in dockerfile.copy_instructions:
+            for source in copy_instr.original_sources:
                 source_stripped = source.strip("/")
 
                 # Case 1: source contains ** or ${VAR} — resolve via glob
@@ -338,7 +331,7 @@ def _extract_production_sources_from_arch_data(
                         if not _inside_repo(match):
                             continue
                         resolved = match.resolve()
-                        if is_manifest:
+                        if copy_instr.manifest_hint:
                             if match.is_dir():
                                 manifest_dirs.add(resolved)
                                 if match.parent.resolve() == resolved_root:
@@ -353,15 +346,13 @@ def _extract_production_sources_from_arch_data(
                 source_path = repo_root / source_stripped
 
                 # Case 2: source resolves to repo_root — apply scoping heuristics
-                if source_path.resolve() == resolved_root and not is_manifest:
-                    # Config override: explicit context for this Dockerfile
-                    if dockerfile_path in docker_contexts:
-                        ctx_dir = repo_root / docker_contexts[dockerfile_path]
+                if source_path.resolve() == resolved_root and not copy_instr.manifest_hint:
+                    if dockerfile.path in docker_contexts:
+                        ctx_dir = repo_root / docker_contexts[dockerfile.path]
                         if ctx_dir.is_dir() and _inside_repo(ctx_dir):
                             production_dirs.add(ctx_dir.resolve())
                         continue
 
-                    # Heuristic A: Go Dockerfile → go list -deps
                     go_module_dir = _find_go_module_dir(all_sources, repo_root)
                     if go_module_dir:
                         go_dirs = _go_list_production_dirs(go_module_dir)
@@ -370,7 +361,6 @@ def _extract_production_sources_from_arch_data(
                         )
                         continue
 
-                    # Heuristic B: JS monorepo → nearest package.json
                     if js_monorepo:
                         pkg_dir = _nearest_package_json_dir(dockerfile_dir, repo_root)
                         if pkg_dir.resolve() != resolved_root and _inside_repo(pkg_dir):
@@ -383,8 +373,8 @@ def _extract_production_sources_from_arch_data(
                 if source_path.is_dir():
                     resolved = source_path.resolve()
                     if resolved == resolved_root:
-                        continue  # skip bare repo root without heuristic context
-                    if is_manifest:
+                        continue
+                    if copy_instr.manifest_hint:
                         manifest_dirs.add(resolved)
                         if source_path.parent.resolve() == resolved_root:
                             manifest_source_folders.append(source_path.name)
@@ -392,7 +382,7 @@ def _extract_production_sources_from_arch_data(
                         production_dirs.add(resolved)
                 elif source_path.is_file():
                     resolved = source_path.resolve()
-                    if is_manifest:
+                    if copy_instr.manifest_hint:
                         manifest_dirs.add(source_path.parent.resolve())
                     else:
                         production_files.add(resolved)
@@ -410,7 +400,7 @@ def compute_production_scope(
     repo_root: Path,
     manifest_source_folders: Optional[list] = None,
     overlay_paths: Optional[list] = None,
-    arch_data: Optional[dict] = None,
+    arch_data: Optional[ArchAnalyzerResult] = None,
     docker_contexts: Optional[dict] = None,
 ) -> Optional[ProductionScope]:
     """Compute the production file scope for a repository using arch-analyzer.

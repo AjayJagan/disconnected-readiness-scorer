@@ -10,6 +10,86 @@ class Severity(str, Enum):
     INFO = "info"
 
 
+# ---------------------------------------------------------------------------
+# Arch-analyzer typed output
+# ---------------------------------------------------------------------------
+
+@dataclass
+class CopyInstruction:
+    original_sources: list[str] = field(default_factory=list)
+    manifest_hint: bool = False
+
+
+@dataclass
+class BuildCommand:
+    entry_point: str = ""
+
+
+@dataclass
+class DockerfileInfo:
+    path: str = ""
+    copy_instructions: list[CopyInstruction] = field(default_factory=list)
+    build_commands: list[BuildCommand] = field(default_factory=list)
+
+
+@dataclass
+class KustomizeOverlayRef:
+    overlay_path: str = ""
+    file_path: str = ""
+
+
+@dataclass
+class KustomizeComponent:
+    support_file: str = ""
+    overlay_paths: list[str] = field(default_factory=list)
+
+
+@dataclass
+class ArchAnalyzerResult:
+    dockerfiles: list[DockerfileInfo] = field(default_factory=list)
+    kustomize_overlay_refs: list[KustomizeOverlayRef] = field(default_factory=list)
+    kustomize_components: list[KustomizeComponent] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ArchAnalyzerResult":
+        dockerfiles = [
+            DockerfileInfo(
+                path=df.get("path", ""),
+                copy_instructions=[
+                    CopyInstruction(
+                        original_sources=ci.get("original_sources", []),
+                        manifest_hint=ci.get("manifest_hint", False),
+                    )
+                    for ci in df.get("copy_instructions", [])
+                ],
+                build_commands=[
+                    BuildCommand(entry_point=bc.get("entry_point", ""))
+                    for bc in df.get("build_commands", [])
+                ],
+            )
+            for df in data.get("dockerfiles", [])
+        ]
+        overlay_refs = [
+            KustomizeOverlayRef(
+                overlay_path=ref.get("overlay_path", ""),
+                file_path=ref.get("file_path", ""),
+            )
+            for ref in data.get("kustomize_overlay_refs", [])
+        ]
+        components = [
+            KustomizeComponent(
+                support_file=comp.get("support_file", ""),
+                overlay_paths=comp.get("overlay_paths", []),
+            )
+            for comp in data.get("kustomize_components", [])
+        ]
+        return cls(
+            dockerfiles=dockerfiles,
+            kustomize_overlay_refs=overlay_refs,
+            kustomize_components=components,
+        )
+
+
 @dataclass
 class Finding:
     severity: str
@@ -93,7 +173,7 @@ def is_file_in_production_scope(filepath: Path, production_scope: Optional[Produ
 
 
 def build_overlay_file_map(
-    arch_data: dict | None,
+    arch_data: "ArchAnalyzerResult | None",
     repo_root: Path,
 ) -> dict[str, set[Path]]:
     """Build overlay path → files map from kustomize_overlay_refs.
@@ -104,12 +184,10 @@ def build_overlay_file_map(
         return {}
 
     overlay_map: dict[str, set[Path]] = {}
-    for ref in arch_data.get("kustomize_overlay_refs", []):
-        overlay_path = ref.get("overlay_path", "")
-        file_path = ref.get("file_path", "")
-        if overlay_path and file_path:
-            resolved = (repo_root / file_path).resolve()
-            overlay_map.setdefault(overlay_path, set()).add(resolved)
+    for ref in arch_data.kustomize_overlay_refs:
+        if ref.overlay_path and ref.file_path:
+            resolved = (repo_root / ref.file_path).resolve()
+            overlay_map.setdefault(ref.overlay_path, set()).add(resolved)
 
     return overlay_map
 

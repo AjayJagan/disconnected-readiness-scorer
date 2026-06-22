@@ -1,0 +1,50 @@
+{
+  "dockerfiles": [
+    {
+      "path": "Dockerfile",
+      "copy_instructions": [
+        {
+          "original_sources": ["go.mod", "go.sum"],
+          "manifest_hint": false
+        },
+        {
+          "original_sources": ["cmd", "pkg", "internal"],
+          "manifest_hint": false
+        },
+        {
+          "original_sources": ["config"],
+          "manifest_hint": true
+        }
+      ],
+      "build_commands": [
+        {
+          "entry_point": "cmd/manager"
+        }
+      ]
+    }
+  ],
+  "kustomize_overlay_refs": [
+    {
+      "overlay_path": "overlays/odh",
+      "file_path": "config/base/deploy.yaml"
+    },
+    {
+      "overlay_path": "overlays/odh",
+      "file_path": "config/base/service.yaml"
+    },
+    {
+      "overlay_path": "overlays/rhoai",
+      "file_path": "config/base/deploy.yaml"
+    },
+    {
+      "overlay_path": "overlays/rhoai",
+      "file_path": "config/rhoai/patch.yaml"
+    }
+  ],
+  "kustomize_components": [
+    {
+      "support_file": "internal/controller/components/kserve/kserve_support.go",
+      "overlay_paths": ["overlays/odh", "overlays/rhoai"]
+    }
+  ]
+}

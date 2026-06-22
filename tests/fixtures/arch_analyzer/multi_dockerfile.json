@@ -1,0 +1,43 @@
+{
+  "dockerfiles": [
+    {
+      "path": "Dockerfile",
+      "copy_instructions": [
+        {
+          "original_sources": ["cmd", "pkg"],
+          "manifest_hint": false
+        },
+        {
+          "original_sources": ["config"],
+          "manifest_hint": true
+        }
+      ],
+      "build_commands": [
+        {
+          "entry_point": "cmd/server"
+        }
+      ]
+    },
+    {
+      "path": "Dockerfile.worker",
+      "copy_instructions": [
+        {
+          "original_sources": ["${APP_DIR}/worker.go"],
+          "manifest_hint": false
+        }
+      ],
+      "build_commands": [
+        {
+          "entry_point": "cmd/worker"
+        }
+      ]
+    }
+  ],
+  "kustomize_overlay_refs": [
+    {
+      "overlay_path": "overlays/odh",
+      "file_path": "config/base/deploy.yaml"
+    }
+  ],
+  "kustomize_components": []
+}

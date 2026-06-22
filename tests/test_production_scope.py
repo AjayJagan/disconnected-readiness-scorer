@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from rules.common import ProductionScope, is_file_in_production_scope, is_yaml_in_production_scope
+from rules.common import ArchAnalyzerResult, ProductionScope, is_file_in_production_scope, is_yaml_in_production_scope
 from rules.production_scope import (
     _collect_go_embedded_yamls,
     _extract_production_sources_from_arch_data,
@@ -363,6 +363,65 @@ class TestComputeProductionScopeWithManifests:
 
 
 # ---------------------------------------------------------------------------
+# compute_production_scope with arch_data fixtures
+# ---------------------------------------------------------------------------
+
+class TestComputeProductionScopeWithArchData:
+    def test_go_operator_fixture(self, tmp_path):
+        from tests.conftest import load_arch_fixture
+
+        for d in ("cmd/manager", "pkg", "internal", "config"):
+            (tmp_path / d).mkdir(parents=True)
+        (tmp_path / "go.mod").write_text("module example.com\n")
+        (tmp_path / "go.sum").write_text("")
+        (tmp_path / "config" / "kustomization.yaml").write_text(
+            "resources:\n- base/deploy.yaml\n"
+        )
+        base = tmp_path / "config" / "base"
+        base.mkdir()
+        (base / "deploy.yaml").write_text("kind: Deployment")
+
+        arch_data = load_arch_fixture("go_operator")
+        scope = compute_production_scope(tmp_path, arch_data=arch_data)
+        assert scope is not None
+        assert scope.method == "arch-analyzer-original-sources"
+        assert scope.production_dirs is not None
+        assert (tmp_path / "cmd/manager").resolve() in scope.production_dirs
+        assert scope.manifest_files is not None
+        assert scope.manifest_source == "config"
+
+    def test_python_component_fixture(self, tmp_path):
+        from tests.conftest import load_arch_fixture
+
+        (tmp_path / "src").mkdir()
+        (tmp_path / "requirements.txt").write_text("flask==2.0\n")
+
+        arch_data = load_arch_fixture("python_component")
+        scope = compute_production_scope(tmp_path, arch_data=arch_data)
+        assert scope is not None
+        assert scope.method == "arch-analyzer-original-sources"
+        assert scope.production_dirs is not None
+        assert (tmp_path / "src").resolve() in scope.production_dirs
+
+    def test_multi_dockerfile_fixture(self, tmp_path):
+        from tests.conftest import load_arch_fixture
+
+        for d in ("cmd/server", "cmd/worker", "pkg", "config", "config/base"):
+            (tmp_path / d).mkdir(parents=True)
+        (tmp_path / "config" / "kustomization.yaml").write_text(
+            "resources:\n- base/deploy.yaml\n"
+        )
+        (tmp_path / "config" / "base" / "deploy.yaml").write_text("kind: Deployment")
+
+        arch_data = load_arch_fixture("multi_dockerfile")
+        scope = compute_production_scope(tmp_path, arch_data=arch_data)
+        assert scope is not None
+        assert (tmp_path / "cmd/server").resolve() in scope.production_dirs
+        assert (tmp_path / "cmd/worker").resolve() in scope.production_dirs
+        assert (tmp_path / "pkg").resolve() in scope.production_dirs
+
+
+# ---------------------------------------------------------------------------
 # _is_glob_source
 # ---------------------------------------------------------------------------
 
@@ -511,7 +570,7 @@ class TestIsJsMonorepo:
 class TestExtractProductionSources:
     def test_empty_dockerfiles(self, tmp_path):
         dirs, files, m_dirs, m_folders = _extract_production_sources_from_arch_data(
-            {"dockerfiles": []}, tmp_path
+            ArchAnalyzerResult.from_dict({"dockerfiles": []}), tmp_path
         )
         assert dirs == set()
         assert files == set()
@@ -521,33 +580,33 @@ class TestExtractProductionSources:
     def test_literal_source_dir(self, tmp_path):
         src = tmp_path / "src"
         src.mkdir()
-        arch_data = {"dockerfiles": [{
+        arch_data = ArchAnalyzerResult.from_dict({"dockerfiles": [{
             "path": "Dockerfile",
             "copy_instructions": [{"original_sources": ["src"]}],
-        }]}
+        }]})
         dirs, _, _, _ = _extract_production_sources_from_arch_data(arch_data, tmp_path)
         assert src.resolve() in dirs
 
     def test_literal_source_file(self, tmp_path):
         f = tmp_path / "go.mod"
         f.write_text("module example.com\n")
-        arch_data = {"dockerfiles": [{
+        arch_data = ArchAnalyzerResult.from_dict({"dockerfiles": [{
             "path": "Dockerfile",
             "copy_instructions": [{"original_sources": ["go.mod"]}],
-        }]}
+        }]})
         _, files, _, _ = _extract_production_sources_from_arch_data(arch_data, tmp_path)
         assert f.resolve() in files
 
     def test_manifest_hint_dir(self, tmp_path):
         cfg = tmp_path / "config"
         cfg.mkdir()
-        arch_data = {"dockerfiles": [{
+        arch_data = ArchAnalyzerResult.from_dict({"dockerfiles": [{
             "path": "Dockerfile",
             "copy_instructions": [{
                 "original_sources": ["config"],
                 "manifest_hint": True,
             }],
-        }]}
+        }]})
         _, _, m_dirs, m_folders = _extract_production_sources_from_arch_data(arch_data, tmp_path)
         assert cfg.resolve() in m_dirs
         assert "config" in m_folders
@@ -558,11 +617,11 @@ class TestExtractProductionSources:
         src.mkdir()
         cmd = tmp_path / "cmd"
         cmd.mkdir()
-        arch_data = {"dockerfiles": [{
+        arch_data = ArchAnalyzerResult.from_dict({"dockerfiles": [{
             "path": "Dockerfile",
             "build_commands": [{"entry_point": "cmd"}],
             "copy_instructions": [{"original_sources": ["src"]}],
-        }]}
+        }]})
         dirs, _, _, _ = _extract_production_sources_from_arch_data(arch_data, tmp_path)
         assert cmd.resolve() in dirs
         assert src.resolve() in dirs
@@ -570,10 +629,10 @@ class TestExtractProductionSources:
     def test_root_source_with_docker_context(self, tmp_path):
         app = tmp_path / "app"
         app.mkdir()
-        arch_data = {"dockerfiles": [{
+        arch_data = ArchAnalyzerResult.from_dict({"dockerfiles": [{
             "path": "Dockerfile",
             "copy_instructions": [{"original_sources": ["."]}],
-        }]}
+        }]})
         dirs, _, _, _ = _extract_production_sources_from_arch_data(
             arch_data, tmp_path, docker_contexts={"Dockerfile": "app"}
         )
@@ -583,19 +642,19 @@ class TestExtractProductionSources:
         pkg = tmp_path / "pkg"
         pkg.mkdir()
         (pkg / "main.go").write_text("")
-        arch_data = {"dockerfiles": [{
+        arch_data = ArchAnalyzerResult.from_dict({"dockerfiles": [{
             "path": "Dockerfile",
             "copy_instructions": [{"original_sources": ["${APP}/main.go"]}],
-        }]}
+        }]})
         dirs, files, _, _ = _extract_production_sources_from_arch_data(arch_data, tmp_path)
         resolved_files = {f.resolve() for f in files}
         resolved_dirs = {d.resolve() for d in dirs}
         assert (pkg / "main.go").resolve() in resolved_files or pkg.resolve() in resolved_dirs
 
     def test_no_copy_instructions(self, tmp_path):
-        arch_data = {"dockerfiles": [{
+        arch_data = ArchAnalyzerResult.from_dict({"dockerfiles": [{
             "path": "Dockerfile",
-        }]}
+        }]})
         dirs, files, _, _ = _extract_production_sources_from_arch_data(
             arch_data, tmp_path
         )

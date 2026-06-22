@@ -265,7 +265,7 @@ def check_env_var_pattern(
     manifest_env_vars: set[str] | None = None,
     tracked: set[Path] | None = None,
     production_scope=None,
-    arch_data: dict | None = None,
+    arch_data=None,
     non_image_prefixes: list[str] | None = None,
 ) -> RuleResult:
     """Check repos that use RELATED_IMAGE_* env var pattern.
@@ -432,7 +432,7 @@ def check_static_csv_pattern(
     repo_root: Path,
     tracked: set[Path] | None = None,
     production_scope=None,
-    arch_data: dict | None = None,
+    arch_data=None,
     non_image_prefixes: list[str] | None = None,
 ) -> RuleResult:
     """Check repos that use static CSV relatedImages."""
@@ -482,7 +482,7 @@ def check_unmanaged_images(
     manifest_env_vars: set[str],
     tracked: set[Path] | None = None,
     production_scope=None,
-    arch_data: dict | None = None,
+    arch_data=None,
     non_image_prefixes: list[str] | None = None,
 ) -> RuleResult:
     """Check repos with no RELATED_IMAGE pattern but known to be operator-managed.
@@ -529,7 +529,7 @@ def check_unmanaged_images(
     return result
 
 
-def run(repo_root: str, manifest_env_vars: set[str] | None = None, production_scope=None, arch_data: dict | None = None, non_image_prefixes: list[str] | None = None, **_kwargs) -> RuleResult:
+def run(repo_root: str, manifest_env_vars: set[str] | None = None, production_scope=None, arch_data=None, non_image_prefixes: list[str] | None = None, **_kwargs) -> RuleResult:
     """Run the image manifest completeness rule.
 
     When manifest_env_vars is provided, the env_var pattern check will

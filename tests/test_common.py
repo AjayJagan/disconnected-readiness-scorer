@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from rules.common import (
+    ArchAnalyzerResult,
     ConfigError,
     Finding,
     ProductionScope,
@@ -89,15 +90,70 @@ class TestRuleResult:
         assert r.findings[0].severity == "blocker"
 
 
+class TestArchAnalyzerResult:
+    def test_from_dict_full(self):
+        data = {
+            "dockerfiles": [{
+                "path": "Dockerfile",
+                "copy_instructions": [
+                    {"original_sources": ["src", "pkg"], "manifest_hint": False},
+                    {"original_sources": ["config"], "manifest_hint": True},
+                ],
+                "build_commands": [{"entry_point": "cmd/main"}],
+            }],
+            "kustomize_overlay_refs": [
+                {"overlay_path": "overlays/odh", "file_path": "config/base/deploy.yaml"},
+            ],
+            "kustomize_components": [
+                {"support_file": "internal/components/kserve/support.go", "overlay_paths": ["overlays/odh"]},
+            ],
+        }
+        result = ArchAnalyzerResult.from_dict(data)
+        assert len(result.dockerfiles) == 1
+        df = result.dockerfiles[0]
+        assert df.path == "Dockerfile"
+        assert len(df.copy_instructions) == 2
+        assert df.copy_instructions[0].original_sources == ["src", "pkg"]
+        assert df.copy_instructions[0].manifest_hint is False
+        assert df.copy_instructions[1].manifest_hint is True
+        assert df.build_commands[0].entry_point == "cmd/main"
+        assert len(result.kustomize_overlay_refs) == 1
+        assert result.kustomize_overlay_refs[0].overlay_path == "overlays/odh"
+        assert len(result.kustomize_components) == 1
+        assert result.kustomize_components[0].overlay_paths == ["overlays/odh"]
+
+    def test_from_dict_empty(self):
+        result = ArchAnalyzerResult.from_dict({})
+        assert result.dockerfiles == []
+        assert result.kustomize_overlay_refs == []
+        assert result.kustomize_components == []
+
+    def test_from_dict_missing_fields_use_defaults(self):
+        data = {"dockerfiles": [{"path": "Dockerfile"}]}
+        result = ArchAnalyzerResult.from_dict(data)
+        df = result.dockerfiles[0]
+        assert df.copy_instructions == []
+        assert df.build_commands == []
+
+    def test_from_fixture_file(self):
+        from tests.conftest import load_arch_fixture
+        result = load_arch_fixture("go_operator")
+        assert len(result.dockerfiles) == 1
+        assert result.dockerfiles[0].path == "Dockerfile"
+        assert len(result.dockerfiles[0].copy_instructions) == 3
+        assert len(result.kustomize_overlay_refs) == 4
+        assert len(result.kustomize_components) == 1
+
+
 class TestBuildOverlayFileMap:
     def test_valid_data(self, tmp_path):
-        arch_data = {
+        arch_data = ArchAnalyzerResult.from_dict({
             "kustomize_overlay_refs": [
                 {"overlay_path": "overlays/odh", "file_path": "config/base/deploy.yaml"},
                 {"overlay_path": "overlays/odh", "file_path": "config/base/svc.yaml"},
                 {"overlay_path": "overlays/dev", "file_path": "config/dev/patch.yaml"},
             ]
-        }
+        })
         result = build_overlay_file_map(arch_data, tmp_path)
         assert len(result) == 2
         assert len(result["overlays/odh"]) == 2
@@ -107,21 +163,21 @@ class TestBuildOverlayFileMap:
     def test_none_returns_empty(self):
         assert build_overlay_file_map(None, Path(".")) == {}
 
-    def test_empty_dict_returns_empty(self):
-        assert build_overlay_file_map({}, Path(".")) == {}
+    def test_empty_result_returns_empty(self):
+        assert build_overlay_file_map(ArchAnalyzerResult(), Path(".")) == {}
 
     def test_missing_keys_skipped(self):
-        arch_data = {
+        arch_data = ArchAnalyzerResult.from_dict({
             "kustomize_overlay_refs": [
                 {"overlay_path": "overlays/odh"},
                 {"file_path": "config/base/deploy.yaml"},
                 {},
             ]
-        }
+        })
         assert build_overlay_file_map(arch_data, Path(".")) == {}
 
     def test_empty_refs_list(self):
-        assert build_overlay_file_map({"kustomize_overlay_refs": []}, Path(".")) == {}
+        assert build_overlay_file_map(ArchAnalyzerResult(), Path(".")) == {}
 
 
 class TestIsNonProductionOverlayFile:

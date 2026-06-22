@@ -398,6 +398,46 @@ class TestMain:
 
 
 
+# --- integration tests with arch-analyzer fixtures ---
+
+class TestMainWithArchFixtures:
+    """Integration tests that pass real arch-analyzer fixture data through the pipeline."""
+
+    @patch("main.compute_production_scope", return_value=None)
+    def test_arch_data_passed_to_rules(self, _mock_scope):
+        from tests.conftest import load_arch_fixture
+
+        fixture = load_arch_fixture("go_operator")
+        fake_mod = MagicMock()
+        fake_mod.run.return_value = RuleResult(rule="test-rule", passed=True)
+        fake_mod.detect_image_pattern.return_value = "static_csv"
+
+        with patch("main._run_arch_analyzer", return_value=fixture), \
+             patch("importlib.import_module", side_effect=_make_import_side_effect(fake_mod)):
+            exit_code = main([".", "--rules", "tags", "--report", "json"])
+
+        assert exit_code == 0
+        call_kwargs = fake_mod.run.call_args
+        assert call_kwargs[1].get("arch_data") is fixture
+
+    @patch("main.compute_production_scope")
+    def test_arch_data_passed_to_production_scope(self, mock_scope):
+        from tests.conftest import load_arch_fixture
+
+        mock_scope.return_value = None
+        fixture = load_arch_fixture("python_component")
+        fake_mod = MagicMock()
+        fake_mod.run.return_value = RuleResult(rule="test-rule", passed=True)
+        fake_mod.detect_image_pattern.return_value = "static_csv"
+
+        with patch("main._run_arch_analyzer", return_value=fixture), \
+             patch("importlib.import_module", side_effect=_make_import_side_effect(fake_mod)):
+            main([".", "--rules", "tags", "--report", "json"])
+
+        scope_call = mock_scope.call_args
+        assert scope_call[1].get("arch_data") is fixture
+
+
 # --- load_exceptions ---
 
 class TestLoadExceptions:

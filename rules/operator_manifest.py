@@ -15,9 +15,9 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Tuple, Union
 
 try:
-    from rules.common import Finding, RuleResult
+    from rules.common import ArchAnalyzerResult, Finding, RuleResult
 except ModuleNotFoundError:
-    from common import Finding, RuleResult
+    from common import ArchAnalyzerResult, Finding, RuleResult
 
 RELATED_IMAGE_PATTERN = re.compile(r'"(RELATED_IMAGE_[A-Z0-9_]+)"')
 IMAGE_MAP_PATTERN = re.compile(r'"([^"]+)":\s*"(RELATED_IMAGE_[A-Z0-9_]+)"')
@@ -103,7 +103,7 @@ def _get_component_dir(component_key: str) -> str:
 
 
 def parse_overlay_paths_from_arch_data(
-    arch_data: dict, component_key: str,
+    arch_data: ArchAnalyzerResult, component_key: str,
 ) -> List[str]:
     """Extract deployed overlay paths from arch-analyzer kustomize_components.
 
@@ -116,21 +116,19 @@ def parse_overlay_paths_from_arch_data(
 
     dir_name = _get_component_dir(component_key)
 
-    for comp in arch_data.get("kustomize_components", []):
-        source = comp.get("support_file", "")
-        parts = source.split("/")
+    for comp in arch_data.kustomize_components:
+        parts = comp.support_file.split("/")
         if "components" not in parts:
             continue
         idx = parts.index("components")
         if idx + 1 >= len(parts) or parts[idx + 1] != dir_name:
             continue
 
-        raw_paths = comp.get("overlay_paths", [])
-        if not raw_paths:
+        if not comp.overlay_paths:
             return []
 
         result: List[str] = []
-        for path in raw_paths:
+        for path in comp.overlay_paths:
             path = path.strip("/")
             if path and path not in result:
                 result.append(path)

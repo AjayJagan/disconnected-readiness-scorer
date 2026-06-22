@@ -184,7 +184,7 @@ def scan_file(
     return findings
 
 
-def run(repo_root: str, production_scope=None, arch_data: dict | None = None, non_image_prefixes: list[str] | None = None, **_kwargs) -> RuleResult:
+def run(repo_root: str, production_scope=None, arch_data=None, non_image_prefixes: list[str] | None = None, **_kwargs) -> RuleResult:
     root = Path(repo_root)
     result = RuleResult(rule="no-image-tags")
     skip_dirs = SKIP_DIRS
