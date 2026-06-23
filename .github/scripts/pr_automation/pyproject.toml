@@ -1,0 +1,14 @@
+[project]
+name = "drs-pr-automation"
+version = "0.1.0"
+description = "PR automation for disconnected readiness workflows"
+requires-python = ">=3.12"
+
+dependencies = [
+    "PyGithub==2.1.1",
+    "ruamel.yaml==0.18.6",
+    "typing-extensions>=4.0.0",
+]
+
+[tool.uv]
+package = false

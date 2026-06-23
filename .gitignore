@@ -2,3 +2,7 @@ __pycache__/
 .venv
 .repos
 reports
+bin/
+/.coverage*
+junit.xml
+coverage.xml
