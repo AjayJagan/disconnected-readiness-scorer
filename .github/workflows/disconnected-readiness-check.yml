@@ -24,6 +24,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.12"
@@ -35,21 +38,22 @@ jobs:
           ref: 29ae4bc3591a988c6e3f6ec72d0184c0866650fe # Pinned to specific commit for deterministic execution
           path: scorer
 
+      - name: Install dependencies
+        run: |
+          cd scorer && uv sync --extra report --frozen
+
       - name: Run disconnected readiness check
         env:
           INPUT_RULES: ${{ inputs.rules }}
         run: |
-          pip install pyyaml jinja2
           cd scorer
 
-          # Build arguments array with rules if specified
-          ARGS=("${{ github.workspace }}" --report json)
+          RULES_ARG=()
           if [ -n "$INPUT_RULES" ]; then
-            ARGS+=(--rules "$INPUT_RULES")
+            RULES_ARG=(--rules "$INPUT_RULES")
           fi
 
-          # Run analysis and capture JSON output
-          python3 main.py "${ARGS[@]}" > disconnected-report.json
+          uv run main.py "${{ github.workspace }}" --report json -o disconnected-report.json "${RULES_ARG[@]}"
 
       - name: Store results as artifact
         if: always()

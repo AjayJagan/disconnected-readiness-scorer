@@ -35,6 +35,10 @@ on:
   #   branches:
   #     - main
 
+concurrency:
+  group: drs-automation
+  cancel-in-progress: true
+
 jobs:
   drs-automation:
     runs-on: ubuntu-latest
@@ -53,6 +57,9 @@ jobs:
         client-id: ${{ secrets.GH_APP_DR_CLIENT_ID }}
         private-key: ${{ secrets.GH_APP_DR_PRIVATE_KEY }}
 
+    - name: Install uv
+      uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+
     - name: Set up Python
       uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
       with:
@@ -60,7 +67,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        pip install -r .github/scripts/pr_automation/requirements.txt
+        cd .github/scripts/pr_automation && uv sync --frozen
 
     - name: Determine trigger context
       id: context
@@ -95,8 +102,7 @@ jobs:
         INPUT_FORCE_FULL_SCAN: ${{ steps.context.outputs.force_full_scan }}
         TRIGGER_REASON: ${{ steps.context.outputs.trigger_reason }}
       run: |
-        cd .github/scripts
-        PYTHONPATH=. python -m pr_automation
+        cd .github/scripts && uv run --project pr_automation python -m pr_automation
 
     - name: Commit state updates
       if: steps.context.outputs.dry_run == 'false'

@@ -8,13 +8,13 @@ A Claude Code skill (plugin) that scores a repository's readiness for disconnect
 
 ## Dependencies
 
-No `requirements.txt` — install test/dev dependencies directly:
+Managed via `pyproject.toml` + [uv](https://docs.astral.sh/uv/):
 
 ```bash
-pip install pytest pytest-cov pyyaml jinja2
+uv sync --extra dev          # install all dev dependencies
 ```
 
-`pyyaml` and `jinja2` are optional at runtime (rules/report degrade without them, skipping YAML-dependent checks) but required for full test coverage.
+Runtime deps: `pyyaml` (required). Optional: `jinja2` (for Jinja2-based report rendering, falls back to built-in renderer).
 
 ## Testing
 
@@ -25,7 +25,7 @@ python -m pytest tests/test_main.py::TestParseArgs -v      # single test class
 python -m pytest tests/ -v --cov=. --cov-report=term       # with coverage
 ```
 
-CI runs on Python 3.9 and 3.12 (`.github/workflows/ci.yml`). Codecov enforces 80% patch coverage.
+CI runs on Python 3.12 (`.github/workflows/ci.yml`). Codecov enforces 80% patch coverage.
 
 Tests use `tmp_path` fixtures to create disposable repo layouts (Go files, YAML manifests, etc.) and assert on `RuleResult` / `Finding` fields. No external network calls or fixtures needed.
 
