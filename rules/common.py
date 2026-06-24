@@ -59,32 +59,32 @@ class ArchAnalyzerResult:
                     CopyInstruction(
                         original_sources=(
                             ci.get("original_sources")
-                            or ci.get("sources", [])
+                            or ci.get("sources") or []
                         ),
-                        manifest_hint=ci.get("manifest_hint", False),
+                        manifest_hint=ci.get("manifest_hint") or False,
                     )
-                    for ci in df.get("copy_instructions", [])
+                    for ci in (df.get("copy_instructions") or [])
                 ],
                 build_commands=[
-                    BuildCommand(entry_point=bc.get("entry_point", ""))
-                    for bc in df.get("build_commands", [])
+                    BuildCommand(entry_point=bc.get("entry_point") or "")
+                    for bc in (df.get("build_commands") or [])
                 ],
             )
-            for df in data.get("dockerfiles", [])
+            for df in (data.get("dockerfiles") or [])
         ]
         overlay_refs = [
             KustomizeOverlayRef(
-                overlay_path=ref.get("overlay_path", ""),
-                file_path=ref.get("file_path", ""),
+                overlay_path=ref.get("overlay_path") or "",
+                file_path=ref.get("file_path") or "",
             )
-            for ref in data.get("kustomize_overlay_refs", [])
+            for ref in (data.get("kustomize_overlay_refs") or [])
         ]
         components = [
             KustomizeComponent(
-                support_file=comp.get("support_file", ""),
-                overlay_paths=comp.get("overlay_paths", []),
+                support_file=comp.get("support_file") or "",
+                overlay_paths=comp.get("overlay_paths") or [],
             )
-            for comp in data.get("kustomize_components", [])
+            for comp in (data.get("kustomize_components") or [])
         ]
         return cls(
             dockerfiles=dockerfiles,

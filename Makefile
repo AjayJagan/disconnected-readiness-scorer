@@ -45,7 +45,7 @@ install-arch-analyzer: ## Download arch-analyzer binary to bin/
 	@mkdir -p bin
 	@echo "Downloading $(_BINARY) $(ARCH_ANALYZER_VERSION)..."
 	@curl -fsSL "https://github.com/$(ARCH_ANALYZER_REPO)/releases/download/$(ARCH_ANALYZER_VERSION)/$(_BINARY)" -o bin/arch-analyzer
-	@ACTUAL=$$(shasum -a 256 bin/arch-analyzer | awk '{print $$1}'); \
+	@ACTUAL=$$(sha256sum bin/arch-analyzer | awk '{print $$1}'); \
 	if [ "$(_EXPECTED)" = "$$ACTUAL" ]; then \
 		chmod +x bin/arch-analyzer; \
 		echo "OK: bin/arch-analyzer (sha256:$$ACTUAL)"; \
