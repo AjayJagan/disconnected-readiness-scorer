@@ -161,6 +161,12 @@ exceptions:
     repo: model-registry-operator
     paths:
       - "internal/controller/config/defaults.go"
+    images:
+      - "quay.io/opendatahub/model-registry:*"
+      - "quay.io/openshift/origin-oauth-proxy:*"
+      - "quay.io/openshift/origin-kube-rbac-proxy:*"
+      - "quay.io/sclorg/postgresql-16-c10s:*"
+      - "quay.io/opendatahub/odh-model-metadata-collection:*"
     reason: "Default fallback images — overridden at runtime by env vars wired through params.env → kustomize ConfigMap → Deployment env replacement. RELATED_IMAGE_* mapping is in opendatahub-operator imageParamMap."
     reference: "https://issues.redhat.com/browse/RHOAIENG-69989"
 
@@ -168,6 +174,12 @@ exceptions:
     repo: model-registry-operator
     paths:
       - "internal/controller/config/defaults.go"
+    images:
+      - "quay.io/opendatahub/model-registry:*"
+      - "quay.io/openshift/origin-oauth-proxy:*"
+      - "quay.io/openshift/origin-kube-rbac-proxy:*"
+      - "quay.io/sclorg/postgresql-16-c10s:*"
+      - "quay.io/opendatahub/odh-model-metadata-collection:*"
     reason: "Dev-time :latest defaults — replaced by @sha256: digests from Build-Config repos via params.env at release time."
     reference: "https://issues.redhat.com/browse/RHOAIENG-69989"
 
