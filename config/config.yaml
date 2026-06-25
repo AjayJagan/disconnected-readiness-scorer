@@ -157,7 +157,19 @@ exceptions:
   # (no repo-specific exceptions)
 
   # --- model-registry-operator ---
-  # (no repo-specific exceptions)
+  - rule: "image-manifest-complete"
+    repo: model-registry-operator
+    paths:
+      - "internal/controller/config/defaults.go"
+    reason: "Default fallback images — overridden at runtime by env vars wired through params.env → kustomize ConfigMap → Deployment env replacement. RELATED_IMAGE_* mapping is in opendatahub-operator imageParamMap."
+    reference: "https://issues.redhat.com/browse/RHOAIENG-69989"
+
+  - rule: "no-image-tags"
+    repo: model-registry-operator
+    paths:
+      - "internal/controller/config/defaults.go"
+    reason: "Dev-time :latest defaults — replaced by @sha256: digests from Build-Config repos via params.env at release time."
+    reference: "https://issues.redhat.com/browse/RHOAIENG-69989"
 
   # --- training-operator ---
   # (no repo-specific exceptions)
