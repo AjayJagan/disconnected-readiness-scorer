@@ -32,6 +32,7 @@ class ArchAnalyzerError(Exception):
 
 
 CENTRAL_CONFIG_PATH = "config/config.yaml"
+_EXPIRY_WARNING_DAYS = 14
 
 RULE_REGISTRY = {
     "csv": {
@@ -108,9 +109,16 @@ def load_central_config(config_path):
         raise ValueError(
             f"{config_path} must be a YAML mapping, got {type(raw).__name__}"
         )
+    for exc in raw.get("exceptions") or []:
+        if isinstance(exc, dict) and isinstance(exc.get("expires"), date):
+            exc["expires"] = exc["expires"].isoformat()
     _validate_config_schema(raw, config_path)
     exceptions = raw.get("exceptions") or []
     _validate_exceptions(exceptions, config_path)
+    for exc in exceptions:
+        expires = exc.get("expires")
+        if expires is not None:
+            exc["expires"] = date.fromisoformat(expires)
     return {
         "exceptions": exceptions,
         "docker_contexts": raw.get("docker_contexts") or {},
@@ -137,6 +145,22 @@ def _validate_exceptions(exceptions, config_path):
                 f"Exception entry {i + 1} (rule={exc.get('rule', '?')}) "
                 f"in {config_path} is missing required 'reason' field"
             )
+        expires = exc.get("expires")
+        if expires is not None and not isinstance(expires, (str, date)):
+            raise ValueError(
+                f"Exception entry {i + 1} (rule={exc.get('rule', '?')}) "
+                f"in {config_path}: 'expires' must be a YYYY-MM-DD date string, "
+                f"got {type(expires).__name__}"
+            )
+        if isinstance(expires, str):
+            try:
+                date.fromisoformat(expires)
+            except ValueError:
+                raise ValueError(
+                    f"Exception entry {i + 1} (rule={exc.get('rule', '?')}) "
+                    f"in {config_path}: invalid 'expires' date '{expires}', "
+                    f"expected YYYY-MM-DD format"
+                ) from None
 
 
 def _path_matches(filepath: str, pattern: str) -> bool:
@@ -163,17 +187,22 @@ def _path_matches(filepath: str, pattern: str) -> bool:
     return fnmatch(filepath.rsplit("/", 1)[-1], pattern)
 
 
-def apply_exceptions(results, exceptions, repo_name):
+def apply_exceptions(results, exceptions, repo_name, *, today=None):
     """Downgrade blocker findings that match configured exceptions to info severity.
 
     Returns a list of hit counts, one per exception entry (parallel to exceptions list).
     """
     hits = [0] * len(exceptions)
+    if today is None:
+        today = date.today()
     for result in results:
         for finding in result.findings:
             if finding.severity != "blocker":
                 continue
             for i, exc in enumerate(exceptions):
+                exc_expires = exc.get("expires")
+                if exc_expires and exc_expires < today:
+                    continue
                 exc_rule = exc.get("rule", "")
                 if exc_rule != "*":
                     exc_rules = [r.strip() for r in exc_rule.split(",")]
@@ -258,6 +287,11 @@ def parse_args(argv=None):
         "--arch-analyzer",
         default=str(Path(__file__).parent / "bin" / "arch-analyzer"),
         help="Path to arch-analyzer binary (default: bin/arch-analyzer).",
+    )
+    parser.add_argument(
+        "--list-expiring", action="store_true",
+        help="List expired and soon-to-expire exceptions and exit. "
+             "Exit code 0 if none, 2 if any found.",
     )
     return parser.parse_args(argv)
 
@@ -344,7 +378,7 @@ def print_summary(score, results, log_file=None):
     print(f"\nBlockers: {total_blockers} | Passed: {total_passed}", file=out)
 
 
-def render_json(score, results, repo_name, verbose=False, exceptions=None, exception_hits=None):
+def render_json(score, results, repo_name, verbose=False, exceptions=None, exception_hits=None, today=None):
     snippets = _build_exception_snippets(results)
     rules_data = []
     for r in results:
@@ -377,10 +411,36 @@ def render_json(score, results, repo_name, verbose=False, exceptions=None, excep
                 "rule": exc.get("rule", ""),
                 "reason": exc.get("reason", ""),
                 **({"repo": exc["repo"]} if exc.get("repo") else {}),
+                **({"expires": exc["expires"].isoformat()} if exc.get("expires") else {}),
                 "hits": exception_hits[i],
             }
             for i, exc in enumerate(exceptions)
         ]
+        expiring = _find_expiring_exceptions(exceptions, exception_hits, today=today)
+        if expiring:
+            data["expiring_exceptions"] = [
+                {
+                    "rule": exc.get("rule", ""),
+                    "reason": exc.get("reason", ""),
+                    **({"repo": exc["repo"]} if exc.get("repo") else {}),
+                    "expires": exc["expires"].isoformat(),
+                    "days_remaining": days_remaining,
+                    "hits": hits,
+                }
+                for exc, days_remaining, hits in expiring
+            ]
+        expired = _find_expired_exceptions(exceptions, today=today)
+        if expired:
+            data["expired_exceptions"] = [
+                {
+                    "rule": exc.get("rule", ""),
+                    "reason": exc.get("reason", ""),
+                    **({"repo": exc["repo"]} if exc.get("repo") else {}),
+                    "expires": exc["expires"].isoformat(),
+                    "days_since_expiry": days_since,
+                }
+                for exc, days_since in expired
+            ]
     if snippets:
         data["false_positive_help"] = {
             "exception_snippets": snippets,
@@ -500,22 +560,126 @@ def _build_exceptions_section(exceptions, exception_hits):
     ]
     if not applied:
         return ""
+    has_expires = any(exc.get("expires") for exc, _ in applied)
     lines = [
         "## Applied Exceptions",
         "",
-        "| Rule | Repo | Reason | Hits |",
-        "|------|------|--------|------|",
     ]
+    if has_expires:
+        lines.append("| Rule | Repo | Reason | Expires | Hits |")
+        lines.append("|------|------|--------|---------|------|")
+    else:
+        lines.append("| Rule | Repo | Reason | Hits |")
+        lines.append("|------|------|--------|------|")
     for exc, hits in applied:
         rule = _escape_md_cell(exc.get("rule", ""))
         repo = _escape_md_cell(exc.get("repo", ""))
         reason = _escape_md_cell(exc.get("reason", ""))
-        lines.append(f"| {rule} | {repo} | {reason} | {hits} |")
+        if has_expires:
+            exp = exc.get("expires")
+            expires = _escape_md_cell(exp.isoformat() if exp else "")
+            lines.append(f"| {rule} | {repo} | {reason} | {expires} | {hits} |")
+        else:
+            lines.append(f"| {rule} | {repo} | {reason} | {hits} |")
     lines.append("")
     return "\n".join(lines)
 
 
-def render_markdown(score, results, repo_name, exceptions=None, exception_hits=None):
+def _find_expiring_exceptions(exceptions, exception_hits, *, today=None):
+    """Find exceptions that will expire within the warning window.
+
+    Returns a list of (exception_dict, days_remaining, hits) tuples.
+    Excludes already-expired exceptions.
+    """
+    if today is None:
+        today = date.today()
+    expiring = []
+    for i, exc in enumerate(exceptions):
+        exc_expires = exc.get("expires")
+        if not isinstance(exc_expires, date):
+            continue
+        days_remaining = (exc_expires - today).days
+        if 0 <= days_remaining <= _EXPIRY_WARNING_DAYS:
+            hits = exception_hits[i] if exception_hits and i < len(exception_hits) else 0
+            expiring.append((exc, days_remaining, hits))
+    return expiring
+
+
+def _find_expired_exceptions(exceptions, *, today=None):
+    """Find exceptions whose expires date is in the past.
+
+    Returns a list of (exception_dict, days_since_expiry) tuples.
+    """
+    if today is None:
+        today = date.today()
+    expired = []
+    for exc in exceptions:
+        exc_expires = exc.get("expires")
+        if not isinstance(exc_expires, date):
+            continue
+        if exc_expires < today:
+            days_since = (today - exc_expires).days
+            expired.append((exc, days_since))
+    return expired
+
+
+def _build_expiring_exceptions_section(exceptions, exception_hits, *, today=None):
+    """Build markdown section warning about soon-to-expire exceptions."""
+    expiring = _find_expiring_exceptions(exceptions, exception_hits, today=today)
+    if not expiring:
+        return ""
+    lines = [
+        "## Expiring Exceptions",
+        "",
+        f"The following {len(expiring)} exception(s) will expire "
+        f"within {_EXPIRY_WARNING_DAYS} days.",
+        "Update the `expires` date in `config/config.yaml` to renew, "
+        "or remediate the underlying findings.",
+        "",
+        "| Rule | Repo | Reason | Expires | Days Left | Hits |",
+        "|------|------|--------|---------|-----------|------|",
+    ]
+    for exc, days_remaining, hits in expiring:
+        rule = _escape_md_cell(exc.get("rule", ""))
+        repo = _escape_md_cell(exc.get("repo", ""))
+        reason = _escape_md_cell(exc.get("reason", ""))
+        expires = exc["expires"].isoformat()
+        lines.append(
+            f"| {rule} | {repo} | {reason} | {expires} | {days_remaining} | {hits} |"
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _build_expired_exceptions_section(exceptions, *, today=None):
+    """Build markdown section listing already-expired exceptions."""
+    expired = _find_expired_exceptions(exceptions, today=today)
+    if not expired:
+        return ""
+    lines = [
+        "## Expired Exceptions",
+        "",
+        f"The following {len(expired)} exception(s) have expired and are "
+        "**no longer applied** — matching findings have reverted to blocker "
+        "severity. Renew the `expires` date or remove the exception from "
+        "`config/config.yaml`.",
+        "",
+        "| Rule | Repo | Reason | Expired On | Days Ago |",
+        "|------|------|--------|------------|----------|",
+    ]
+    for exc, days_since in expired:
+        rule = _escape_md_cell(exc.get("rule", ""))
+        repo = _escape_md_cell(exc.get("repo", ""))
+        reason = _escape_md_cell(exc.get("reason", ""))
+        expires = exc["expires"].isoformat()
+        lines.append(
+            f"| {rule} | {repo} | {reason} | {expires} | {days_since} |"
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def render_markdown(score, results, repo_name, exceptions=None, exception_hits=None, today=None):
     template_path = Path(__file__).parent / "templates" / "report.md"
     try:
         template_str = template_path.read_text()
@@ -547,6 +711,12 @@ def render_markdown(score, results, repo_name, exceptions=None, exception_hits=N
         ],
         "blockers": blocker_rows,
         "exceptions_section": _build_exceptions_section(exceptions, exception_hits),
+        "expiring_exceptions_section": _build_expiring_exceptions_section(
+            exceptions or [], exception_hits or [], today=today
+        ),
+        "expired_exceptions_section": _build_expired_exceptions_section(
+            exceptions or [], today=today
+        ),
         "false_positive_section": _build_false_positive_section(
             _build_exception_snippets(results)
         ),
@@ -802,7 +972,8 @@ def _run(args, operator_path, *,
         results.append(result)
 
     exceptions = central_cfg["exceptions"]
-    exception_hits = apply_exceptions(results, exceptions, repo_name) if exceptions else []
+    today = date.today()
+    exception_hits = apply_exceptions(results, exceptions, repo_name, today=today) if exceptions else []
 
     score = compute_score(results)
     print_summary(score, results, log_file=_stderr)
@@ -821,7 +992,7 @@ def _run(args, operator_path, *,
             f"Provide one -o per --report format, in the same order."
         )
 
-    exc_args = dict(exceptions=exceptions, exception_hits=exception_hits)
+    exc_args = dict(exceptions=exceptions, exception_hits=exception_hits, today=today)
 
     for i, fmt in enumerate(formats):
         if fmt == "json":
@@ -841,6 +1012,46 @@ def _run(args, operator_path, *,
 
 def main(argv=None):
     args = parse_args(argv)
+
+    if args.list_expiring:
+        config_path = args.config or str(
+            Path(__file__).parent / CENTRAL_CONFIG_PATH
+        )
+        central_cfg = load_central_config(config_path)
+        exceptions = central_cfg["exceptions"]
+        dummy_hits = [0] * len(exceptions)
+        today = date.today()
+        expired = _find_expired_exceptions(exceptions, today=today)
+        expiring = _find_expiring_exceptions(exceptions, dummy_hits, today=today)
+        found = False
+        if expired:
+            found = True
+            print(f"{len(expired)} expired exception(s) — no longer applied:\n")
+            print(f"{'Rule':<25} {'Repo':<30} {'Expired On':<12} "
+                  f"{'Days Ago':<10} Reason")
+            print("-" * 100)
+            for exc, days_since in expired:
+                print(f"{exc.get('rule', ''):<25} "
+                      f"{exc.get('repo', ''):<30} "
+                      f"{exc['expires'].isoformat():<12} {days_since:<10} "
+                      f"{exc.get('reason', '')}")
+            print()
+        if expiring:
+            found = True
+            print(f"{len(expiring)} exception(s) expiring within "
+                  f"{_EXPIRY_WARNING_DAYS} days:\n")
+            print(f"{'Rule':<25} {'Repo':<30} {'Expires':<12} "
+                  f"{'Days Left':<10} Reason")
+            print("-" * 100)
+            for exc, days_remaining, _ in expiring:
+                print(f"{exc.get('rule', ''):<25} "
+                      f"{exc.get('repo', ''):<30} "
+                      f"{exc['expires'].isoformat():<12} {days_remaining:<10} "
+                      f"{exc.get('reason', '')}")
+        if not found:
+            print("No expired or expiring exceptions found.")
+            return 0
+        return 2
 
     try:
         if args.operator_path:
