@@ -242,12 +242,49 @@ The primary use case for this tool is running it against Pull Requests in RHOAI 
 
 ### GitHub Actions (recommended)
 
-Add a workflow to each target repository that runs the scorer on every PR:
+Use the reusable workflow for consistent integration across repositories:
 
 ```yaml
 # .github/workflows/disconnected-readiness.yml
 name: Disconnected Readiness Check
 
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    uses: opendatahub-io/disconnected-readiness-scorer/.github/workflows/disconnected-readiness-check.yml@v1
+    with:
+      rules: ""  # Leave empty for all default rules, or specify: "csv,tags,egress"
+```
+
+#### Versioning Strategy
+
+This repository uses **floating major version tags** for automatic updates while maintaining security:
+
+```yaml
+# Recommended: Automatic updates within major version
+uses: opendatahub-io/disconnected-readiness-scorer/.github/workflows/disconnected-readiness-check.yml@v1
+```
+
+**Migration from hardcoded SHA:**
+```diff
+- uses: .../.github/workflows/disconnected-readiness-check.yml@29ae4bc3591a988c6e3f6ec72d0184c0866650fe
++ uses: .../.github/workflows/disconnected-readiness-check.yml@v1
+```
+
+**Complete Documentation:**
+- **[docs/VERSIONING.md](docs/VERSIONING.md)** - Consumer strategy guide (when to use @v1 vs @v1.2.3 vs @sha)
+- **[docs/RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md)** - Release procedures and troubleshooting  
+- **[Releases](https://github.com/opendatahub-io/disconnected-readiness-scorer/releases)** - Version history and release notes
+
+### Manual Setup (alternative)
+
+If you prefer direct integration without the reusable workflow:
+
+```yaml
+name: Disconnected Readiness Check
 on:
   pull_request:
     branches: [main]
@@ -263,7 +300,7 @@ jobs:
           python-version: '3.12'
 
       - name: Clone disconnected-readiness-scorer
-        run: git clone --depth 1 https://github.com/opendatahub-io/disconnected-readiness-scorer.git /tmp/scorer
+        run: git clone --depth 1 --branch v1 https://github.com/opendatahub-io/disconnected-readiness-scorer.git /tmp/scorer
 
       - name: Install kustomize
         run: |
@@ -271,7 +308,7 @@ jobs:
           sudo mv kustomize /usr/local/bin/
 
       - name: Install dependencies
-        run: pip install pyyaml
+        run: pip install pyyaml jinja2
 
       - name: Run disconnected readiness check
         run: python3 /tmp/scorer/main.py . --report json --output disconnected-report.json
