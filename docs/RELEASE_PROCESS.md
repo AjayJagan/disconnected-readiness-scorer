@@ -72,7 +72,7 @@ If any step failed, check the GitHub Actions logs for the "Create Release" workf
 
 1. **Update documentation** if breaking changes occurred (particularly for major versions)
 2. **Monitor for issues** in the first 24-48 hours after release
-3. **Note**: Consumers using `@v1` will automatically receive patch/minor updates
+3. **Note**: Consumers using floating tags (`@v1`, `@v2`, etc.) will automatically receive all patch and minor updates within their major version (including bug fixes, security patches, and new features)
 
 ## Emergency Procedures
 
@@ -97,27 +97,37 @@ echo "Emergency rollback: v1 → v1.2.2 due to critical issue in v1.2.3" >> ROLL
 
 **For floating tag concepts, see [VERSIONING.md](VERSIONING.md)**
 
-## Consumer Migration Support
+## Automated Consumer Onboarding
 
-### Quick Migration Examples
+### How It Works
 
-**From hardcoded SHA to floating tag:**
+Consumer repositories are **automatically onboarded** via the `create-drs-prs.yml` workflow:
+
+✅ **Automated PR creation** - Workflow creates PRs in target repositories  
+✅ **Template propagation** - Changes to `.github/templates/workflow.yml` trigger updates  
+✅ **Weekly scans** - Discovers new repositories that need onboarding  
+✅ **Safe process** - All changes go through normal PR review
+
+
+### Automated PR Strategy
+
+**The automation creates PRs using floating major tags** (`@v1`) by default. This choice balances:
+
+✅ **Automatic security patches** - Teams get fixes without manual intervention  
+✅ **Reduced maintenance burden** - No weekly update PRs across 15+ repositories  
+✅ **Breaking change protection** - Manual upgrade only needed for major versions (v1→v2)
+
+### Alternative Security Approaches
+
+**If your team requires stricter security controls:**
+
+**Manual pinning** - Edit the automated PR to use specific versions:
 ```diff
-- uses: opendatahub-io/disconnected-readiness-scorer/.github/workflows/disconnected-readiness-check.yml@29ae4bc3591a988c6e3f6ec72d0184c0866650fe
-+ uses: opendatahub-io/disconnected-readiness-scorer/.github/workflows/disconnected-readiness-check.yml@v1
+- uses: opendatahub-io/disconnected-readiness-scorer/.github/workflows/disconnected-readiness-check.yml@v1
++ uses: opendatahub-io/disconnected-readiness-scorer/.github/workflows/disconnected-readiness-check.yml@v1.2.3
 ```
 
-**Testing new major versions:**
-```yaml
-# Test new major version safely
-- name: Test with v2
-  uses: opendatahub-io/disconnected-readiness-scorer/.github/workflows/disconnected-readiness-check.yml@v2
-  continue-on-error: true
-```
-
-**For comprehensive migration guidance, see [VERSIONING.md](VERSIONING.md)**
-
-**For versioning strategy and consumer guidelines, see [VERSIONING.md](VERSIONING.md)**
+**For complete security tier documentation, see [VERSIONING.md](VERSIONING.md)**
 
 ## Troubleshooting Release Process
 
@@ -159,7 +169,9 @@ git tag --list | grep "v1\."
 
 #### Floating Tag Update Issues
 
-**Issue**: Consumers report old version after release
+**Update Timing**: Floating tags are updated **immediately** when the release workflow completes (typically 2-3 minutes after triggering the release).
+
+**Issue**: Consumers report old version after release  
 **Cause**: Git client caching old floating tag reference
 
 **Solution**: Consumers should refresh their git references
@@ -167,6 +179,8 @@ git tag --list | grep "v1\."
 # For consumers experiencing issues
 git fetch --tags --force
 ```
+
+**GitHub Actions automatically fetches latest tags**, so most consumer workflows will get updates on their next run without manual intervention.
 
 #### Rollback Scenarios
 

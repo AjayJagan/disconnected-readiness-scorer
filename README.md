@@ -268,12 +268,6 @@ This repository uses **floating major version tags** for automatic updates while
 uses: opendatahub-io/disconnected-readiness-scorer/.github/workflows/disconnected-readiness-check.yml@v1
 ```
 
-**Migration from hardcoded SHA:**
-```diff
-- uses: .../.github/workflows/disconnected-readiness-check.yml@29ae4bc3591a988c6e3f6ec72d0184c0866650fe
-+ uses: .../.github/workflows/disconnected-readiness-check.yml@v1
-```
-
 **Complete Documentation:**
 - **[docs/VERSIONING.md](docs/VERSIONING.md)** - Consumer strategy guide (when to use @v1 vs @v1.2.3 vs @sha)
 - **[docs/RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md)** - Release procedures and troubleshooting  

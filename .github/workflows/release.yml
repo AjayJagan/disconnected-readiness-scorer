@@ -7,11 +7,11 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version (e.g., v1.0.0, v1.1.0, v2.0.0)'
+        description: "Release version (e.g., v1.0.0, v1.1.0, v2.0.0)"
         required: true
         type: string
       prerelease:
-        description: 'Mark as pre-release'
+        description: "Mark as pre-release"
         required: false
         type: boolean
         default: false
@@ -26,8 +26,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
-          fetch-tags: true  # Need tags for validation, GitHub API handles the rest
-          persist-credentials: false
+          fetch-tags: true # Need tags for validation, GitHub API handles the rest
 
       - name: Validate version format
         id: validate
@@ -60,29 +59,27 @@ jobs:
           # Check if the current major version tag already exists
           EXISTING_MAJOR_TAG=$(git tag --list | grep -E "^$MAJOR_VERSION$" || echo "")
 
-          if [[ -n "$EXISTING_MAJOR_TAG" ]]; then
-            # Get what the current major tag points to
-            CURRENT_MAJOR_TARGET=$(git rev-list -n 1 "$MAJOR_VERSION" 2>/dev/null || echo "")
+          if [[ -z "$EXISTING_MAJOR_TAG" ]]; then
+            # Major version tag doesn't exist yet - this is the first release in a new major series
+            # Find the highest existing major version to determine if this is truly a major bump
+            CURRENT_MAJOR_NUM=$(echo "$MAJOR_VERSION" | sed 's/v//')
 
-            if [[ -n "$CURRENT_MAJOR_TARGET" ]]; then
-              # Find the previous major version by getting the latest semver tag that's not current major
-              LATEST_TAG=$(git tag --list --sort=-version:refname | grep -E "^v[0-9]+\.[0-9]+\.[0-9]+$" | head -n 1 || echo "")
+            # Get all existing major version numbers and find the highest one below current
+            EXISTING_MAJORS=$(git tag --list | grep -E "^v[0-9]+$" | sed 's/v//' | sort -n)
 
-              if [[ -n "$LATEST_TAG" ]]; then
-                PREVIOUS_MAJOR=$(echo "$LATEST_TAG" | cut -d. -f1)
+            if [[ -n "$EXISTING_MAJORS" ]]; then
+              HIGHEST_EXISTING_MAJOR=$(echo "$EXISTING_MAJORS" | tail -n 1)
 
-                # Only consider it a major bump if we're moving to a new major version
-                CURRENT_MAJOR_NUM=$(echo "$MAJOR_VERSION" | sed 's/v//')
-                PREVIOUS_MAJOR_NUM=$(echo "$PREVIOUS_MAJOR" | sed 's/v//')
-
-                if [[ "$CURRENT_MAJOR_NUM" -gt "$PREVIOUS_MAJOR_NUM" ]]; then
-                  IS_MAJOR_BUMP="true"
-                  echo "Detected major version bump: $PREVIOUS_MAJOR -> $MAJOR_VERSION"
-                fi
+              if [[ "$CURRENT_MAJOR_NUM" -gt "$HIGHEST_EXISTING_MAJOR" ]]; then
+                IS_MAJOR_BUMP="true"
+                PREVIOUS_MAJOR="v$HIGHEST_EXISTING_MAJOR"
+                echo "Detected major version bump: $PREVIOUS_MAJOR -> $MAJOR_VERSION"
               fi
+            else
+              echo "No existing major tags found - this is the initial major version"
             fi
           else
-            echo "No existing major tag $MAJOR_VERSION found - this is the initial release for this major version"
+            echo "Major tag $MAJOR_VERSION already exists - this is a minor/patch release within existing major version"
           fi
 
           echo "Version format valid: $VERSION"
@@ -94,10 +91,10 @@ jobs:
 
       - name: Update templates for major version bump
         if: steps.validate.outputs.is_major_bump == 'true'
+        env:
+          MAJOR_VERSION: ${{ steps.validate.outputs.major_version }}
+          PREVIOUS_MAJOR: ${{ steps.validate.outputs.previous_major_version }}
         run: |
-          MAJOR_VERSION="${{ steps.validate.outputs.major_version }}"
-          PREVIOUS_MAJOR="${{ steps.validate.outputs.previous_major_version }}"
-
           echo "Updating workflows and templates from $PREVIOUS_MAJOR to $MAJOR_VERSION"
 
           # Update template workflow for users to copy
@@ -117,18 +114,18 @@ jobs:
 
             - Updated from ${{ steps.validate.outputs.previous_major_version }} to ${{ steps.validate.outputs.major_version }}
             - Ensures new users get latest major version in template
-          file_pattern: '.github/templates/workflow.yml .github/workflows/disconnected-readiness-check.yml'
-          commit_user_name: 'github-actions[bot]'
-          commit_user_email: 'github-actions[bot]@users.noreply.github.com'
-          commit_author: 'github-actions[bot] <github-actions[bot]@users.noreply.github.com>'
+          file_pattern: ".github/templates/workflow.yml .github/workflows/disconnected-readiness-check.yml"
+          commit_user_name: "github-actions[bot]"
+          commit_user_email: "github-actions[bot]@users.noreply.github.com"
+          commit_author: "github-actions[bot] <github-actions[bot]@users.noreply.github.com>"
           skip_dirty_check: false
           skip_fetch: false
 
       - name: Create release tags
+        env:
+          VERSION: ${{ steps.validate.outputs.version }}
+          MAJOR_VERSION: ${{ steps.validate.outputs.major_version }}
         run: |
-          VERSION="${{ steps.validate.outputs.version }}"
-          MAJOR_VERSION="${{ steps.validate.outputs.major_version }}"
-
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
@@ -161,10 +158,10 @@ jobs:
           prerelease: ${{ inputs.prerelease }}
 
       - name: Verify release success
+        env:
+          VERSION: ${{ steps.validate.outputs.version }}
+          MAJOR_VERSION: ${{ steps.validate.outputs.major_version }}
         run: |
-          VERSION="${{ steps.validate.outputs.version }}"
-          MAJOR_VERSION="${{ steps.validate.outputs.major_version }}"
-
           echo "Release $VERSION created successfully!"
           echo "   - Immutable Tag: $VERSION"
           echo "   - Floating Tag: $MAJOR_VERSION -> $VERSION"

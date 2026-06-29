@@ -75,9 +75,10 @@ uses: opendatahub-io/disconnected-readiness-scorer/.github/workflows/disconnecte
 
 ## Security Considerations
 
-### Tag Immutability
-- **Semantic version tags** (v1.0.0) are never updated after creation
-- **Floating major tags** (v1) are updated only through the release workflow
+### Tag Management Policy
+- **Semantic version tags** (v1.0.0) follow immutability policy - once created, they are never moved or updated
+- **Floating major tags** (v1) are intentionally mutable - updated through the release workflow to point to latest release
+- **No GitHub tag protection** is currently configured - immutability relies on workflow discipline
 
 ### Supply Chain Security
 - Release workflow requires elevated permissions
@@ -93,17 +94,7 @@ uses: opendatahub-io/disconnected-readiness-scorer/.github/workflows/disconnecte
 
 ### The Balance: Reproducibility vs. Ease of Adoption
 
-Our strategy provides both options to balance competing needs:
-
-**Reproducible Builds (Explicit Pinning):**
-```yaml
-uses: .../.github/workflows/disconnected-readiness-check.yml@v1.2.3  # Never changes
-```
-
-**Automatic Updates (Floating Tags):**
-```yaml
-uses: .../.github/workflows/disconnected-readiness-check.yml@v1       # Gets security patches
-```
+Our strategy provides both options to balance competing needs - teams choose the approach that fits their security and operational requirements.
 
 ## Release Information
 
