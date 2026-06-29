@@ -3,6 +3,7 @@
 import json
 import sys
 from dataclasses import dataclass, field
+from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -11,11 +12,17 @@ import pytest
 from main import (
     ArchAnalyzerError,
     _build_exception_snippets,
+    _build_exceptions_section,
+    _build_expired_exceptions_section,
+    _build_expiring_exceptions_section,
     _build_false_positive_section,
+    _find_expired_exceptions,
+    _find_expiring_exceptions,
     _get_repo_name,
     _render_template_simple,
     _run_arch_analyzer,
     _validate_config_schema,
+    _EXPIRY_WARNING_DAYS,
     adapt_manifest_result,
     apply_exceptions,
     compute_score,
@@ -1036,3 +1043,399 @@ class TestExceptionSnippets:
         ])]
         data = json.loads(render_json("READY", results, "repo"))
         assert "false_positive_help" not in data
+
+
+# ---------------------------------------------------------------------------
+# Exception expiration — validation
+# ---------------------------------------------------------------------------
+
+class TestValidateExceptionsExpires:
+    def test_valid_expires_string(self, tmp_path):
+        f = tmp_path / "config.yaml"
+        f.write_text(
+            "exceptions:\n"
+            "  - rule: no-image-tags\n"
+            '    reason: "temp exception"\n'
+            '    expires: "2025-12-31"\n'
+        )
+        result = load_exceptions(str(f))
+        assert result[0]["expires"] == date(2025, 12, 31)
+
+    def test_expires_bare_date_normalized(self, tmp_path):
+        """YAML auto-parses bare dates as datetime.date objects."""
+        f = tmp_path / "config.yaml"
+        f.write_text(
+            "exceptions:\n"
+            "  - rule: no-image-tags\n"
+            "    reason: temp\n"
+            "    expires: 2025-12-31\n"
+        )
+        result = load_exceptions(str(f))
+        assert result[0]["expires"] == date(2025, 12, 31)
+        assert isinstance(result[0]["expires"], date)
+
+    def test_invalid_expires_format_raises(self, tmp_path):
+        f = tmp_path / "config.yaml"
+        f.write_text(
+            "exceptions:\n"
+            "  - rule: no-image-tags\n"
+            '    reason: "temp"\n'
+            '    expires: "not-a-date"\n'
+        )
+        with pytest.raises(ValueError, match=r"invalid.*expires.*date"):
+            load_exceptions(str(f))
+
+    def test_expires_wrong_type_raises(self, tmp_path):
+        f = tmp_path / "config.yaml"
+        f.write_text(
+            "exceptions:\n"
+            "  - rule: no-image-tags\n"
+            '    reason: "temp"\n'
+            "    expires: 42\n"
+        )
+        with pytest.raises(ValueError, match="expires"):
+            load_exceptions(str(f))
+
+    def test_no_expires_field_passes(self, tmp_path):
+        f = tmp_path / "config.yaml"
+        f.write_text(
+            "exceptions:\n"
+            "  - rule: '*'\n"
+            '    reason: "permanent"\n'
+        )
+        result = load_exceptions(str(f))
+        assert "expires" not in result[0]
+
+
+# ---------------------------------------------------------------------------
+# Exception expiration — enforcement
+# ---------------------------------------------------------------------------
+
+class TestApplyExceptionsExpiration:
+    def test_expired_exception_not_applied(self):
+        results = [RuleResult(
+            rule="no-image-tags", passed=False,
+            findings=[Finding("blocker", "f.yaml", 1, "img:latest", "bad tag")],
+        )]
+        exceptions = [{"rule": "no-image-tags", "reason": "temp",
+                        "expires": date(2020, 1, 1)}]
+        apply_exceptions(results, exceptions, "repo")
+        assert results[0].findings[0].severity == "blocker"
+        assert results[0].passed is False
+
+    def test_future_exception_still_applied(self):
+        results = [RuleResult(
+            rule="no-image-tags", passed=False,
+            findings=[Finding("blocker", "f.yaml", 1, "img:latest", "bad tag")],
+        )]
+        exceptions = [{"rule": "no-image-tags", "reason": "temp",
+                        "expires": date(2099, 12, 31)}]
+        apply_exceptions(results, exceptions, "repo")
+        assert results[0].findings[0].severity == "info"
+
+    def test_expires_today_still_honored(self):
+        results = [RuleResult(
+            rule="r", passed=False,
+            findings=[Finding("blocker", "f", 1, "", "msg")],
+        )]
+        exceptions = [{"rule": "r", "reason": "ok", "expires": date.today()}]
+        apply_exceptions(results, exceptions, "repo")
+        assert results[0].findings[0].severity == "info"
+
+    def test_expires_yesterday_not_honored(self):
+        yesterday = date.today() - timedelta(days=1)
+        results = [RuleResult(
+            rule="r", passed=False,
+            findings=[Finding("blocker", "f", 1, "", "msg")],
+        )]
+        exceptions = [{"rule": "r", "reason": "ok", "expires": yesterday}]
+        apply_exceptions(results, exceptions, "repo")
+        assert results[0].findings[0].severity == "blocker"
+
+    def test_no_expires_field_is_permanent(self):
+        results = [RuleResult(
+            rule="r", passed=False,
+            findings=[Finding("blocker", "f", 1, "", "msg")],
+        )]
+        exceptions = [{"rule": "r", "reason": "permanent"}]
+        apply_exceptions(results, exceptions, "repo")
+        assert results[0].findings[0].severity == "info"
+
+    def test_expired_exception_hit_count_zero(self):
+        results = [RuleResult(
+            rule="r", passed=False,
+            findings=[Finding("blocker", "f", 1, "", "msg")],
+        )]
+        exceptions = [{"rule": "r", "reason": "expired",
+                        "expires": date(2020, 1, 1)}]
+        hits = apply_exceptions(results, exceptions, "repo")
+        assert hits == [0]
+
+    def test_mix_of_expired_and_active(self):
+        results = [RuleResult(
+            rule="r", passed=False,
+            findings=[Finding("blocker", "f", 1, "", "msg")],
+        )]
+        exceptions = [
+            {"rule": "r", "reason": "expired", "expires": date(2020, 1, 1)},
+            {"rule": "r", "reason": "active", "expires": date(2099, 12, 31)},
+        ]
+        hits = apply_exceptions(results, exceptions, "repo")
+        assert hits == [0, 1]
+        assert results[0].findings[0].severity == "info"
+
+
+# ---------------------------------------------------------------------------
+# Exception expiration — warnings and reports
+# ---------------------------------------------------------------------------
+
+class TestExpiringExceptionsReport:
+    def test_find_expiring_exceptions(self):
+        soon = date.today() + timedelta(days=7)
+        exceptions = [
+            {"rule": "r", "reason": "soon", "expires": soon},
+            {"rule": "r2", "reason": "permanent"},
+            {"rule": "r3", "reason": "expired", "expires": date(2020, 1, 1)},
+        ]
+        hits = [5, 3, 0]
+        expiring = _find_expiring_exceptions(exceptions, hits)
+        assert len(expiring) == 1
+        assert expiring[0][0]["reason"] == "soon"
+        assert expiring[0][1] == 7
+        assert expiring[0][2] == 5
+
+    def test_find_expiring_none_within_window(self):
+        exceptions = [
+            {"rule": "r", "reason": "far", "expires": date(2099, 12, 31)},
+            {"rule": "r2", "reason": "permanent"},
+        ]
+        assert _find_expiring_exceptions(exceptions, [1, 1]) == []
+
+    def test_expiring_section_in_markdown(self):
+        soon = date.today() + timedelta(days=5)
+        exceptions = [{"rule": "r", "repo": "my-repo",
+                        "reason": "temp fix", "expires": soon}]
+        section = _build_expiring_exceptions_section(exceptions, [3])
+        assert "Expiring Exceptions" in section
+        assert "my-repo" in section
+        assert "5" in section
+
+    def test_expiring_section_empty_when_none(self):
+        assert _build_expiring_exceptions_section([], []) == ""
+
+    def test_json_report_includes_expiring_exceptions(self):
+        soon = date.today() + timedelta(days=3)
+        results = [RuleResult(rule="r")]
+        exceptions = [{"rule": "r", "reason": "temp", "expires": soon}]
+        data = json.loads(render_json(
+            "READY", results, "repo",
+            exceptions=exceptions, exception_hits=[0],
+        ))
+        assert "expiring_exceptions" in data
+        assert data["expiring_exceptions"][0]["days_remaining"] == 3
+
+    def test_json_report_no_expiring_when_none(self):
+        results = [RuleResult(rule="r")]
+        exceptions = [{"rule": "r", "reason": "perm"}]
+        data = json.loads(render_json(
+            "READY", results, "repo",
+            exceptions=exceptions, exception_hits=[0],
+        ))
+        assert "expiring_exceptions" not in data
+
+    def test_json_report_includes_expires_in_exceptions(self):
+        results = [RuleResult(rule="r")]
+        exceptions = [{"rule": "r", "reason": "temp",
+                        "expires": date(2099, 12, 31)}]
+        data = json.loads(render_json(
+            "READY", results, "repo",
+            exceptions=exceptions, exception_hits=[1],
+        ))
+        assert data["exceptions"][0]["expires"] == "2099-12-31"
+
+    def test_json_report_omits_expires_when_not_set(self):
+        results = [RuleResult(rule="r")]
+        exceptions = [{"rule": "r", "reason": "perm"}]
+        data = json.loads(render_json(
+            "READY", results, "repo",
+            exceptions=exceptions, exception_hits=[1],
+        ))
+        assert "expires" not in data["exceptions"][0]
+
+    def test_applied_exceptions_section_shows_expires_column(self):
+        exceptions = [
+            {"rule": "r", "reason": "temp", "expires": date(2025, 9, 1)},
+        ]
+        section = _build_exceptions_section(exceptions, [3])
+        assert "Expires" in section
+        assert "2025-09-01" in section
+
+    def test_applied_exceptions_section_no_expires_column_when_none(self):
+        exceptions = [{"rule": "r", "reason": "perm"}]
+        section = _build_exceptions_section(exceptions, [3])
+        assert "Expires" not in section
+
+
+# ---------------------------------------------------------------------------
+# Exception expiration — schema validation
+# ---------------------------------------------------------------------------
+
+class TestSchemaExpiresField:
+    def test_expires_field_accepted_by_schema(self):
+        _validate_config_schema(
+            {"exceptions": [{"rule": "r", "reason": "ok",
+                              "expires": "2025-09-01"}]},
+            "test.yaml",
+        )
+
+    def test_invalid_expires_type_fails_schema(self):
+        with pytest.raises(ValueError, match="schema validation error"):
+            _validate_config_schema(
+                {"exceptions": [{"rule": "r", "reason": "ok",
+                                  "expires": 123}]},
+                "test.yaml",
+            )
+
+
+# ---------------------------------------------------------------------------
+# --list-expiring CLI flag
+# ---------------------------------------------------------------------------
+
+class TestListExpiring:
+    def test_list_expiring_flag_parsed(self):
+        args = parse_args([".", "--list-expiring"])
+        assert args.list_expiring is True
+
+    def test_list_expiring_default_false(self):
+        args = parse_args(["."])
+        assert args.list_expiring is False
+
+    def test_list_expiring_no_expiring_returns_zero(self, tmp_path, capsys):
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text(
+            "exceptions:\n"
+            "  - rule: r\n"
+            "    reason: permanent\n"
+        )
+        rc = main([".", "--list-expiring", "--config", str(cfg)])
+        assert rc == 0
+        assert "No expired or expiring" in capsys.readouterr().out
+
+    def test_list_expiring_with_expiring_returns_two(self, tmp_path, capsys):
+        from datetime import date, timedelta
+        soon = (date.today() + timedelta(days=5)).isoformat()
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text(
+            "exceptions:\n"
+            "  - rule: r\n"
+            "    reason: temp fix\n"
+            f'    expires: "{soon}"\n'
+            "    repo: my-repo\n"
+        )
+        rc = main([".", "--list-expiring", "--config", str(cfg)])
+        assert rc == 2
+        out = capsys.readouterr().out
+        assert "1 exception(s) expiring" in out
+        assert "my-repo" in out
+
+    def test_list_expiring_shows_expired(self, tmp_path, capsys):
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text(
+            "exceptions:\n"
+            "  - rule: r\n"
+            "    reason: old workaround\n"
+            '    expires: "2020-01-01"\n'
+            "    repo: stale-repo\n"
+        )
+        rc = main([".", "--list-expiring", "--config", str(cfg)])
+        assert rc == 2
+        out = capsys.readouterr().out
+        assert "1 expired exception(s)" in out
+        assert "stale-repo" in out
+        assert "2020-01-01" in out
+
+    def test_list_expiring_shows_both_expired_and_expiring(self, tmp_path, capsys):
+        from datetime import date, timedelta
+        soon = (date.today() + timedelta(days=3)).isoformat()
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text(
+            "exceptions:\n"
+            "  - rule: r1\n"
+            "    reason: already gone\n"
+            '    expires: "2020-06-15"\n'
+            "    repo: old-repo\n"
+            "  - rule: r2\n"
+            "    reason: going soon\n"
+            f'    expires: "{soon}"\n'
+            "    repo: new-repo\n"
+        )
+        rc = main([".", "--list-expiring", "--config", str(cfg)])
+        assert rc == 2
+        out = capsys.readouterr().out
+        assert "1 expired exception(s)" in out
+        assert "1 exception(s) expiring" in out
+        assert "old-repo" in out
+        assert "new-repo" in out
+
+
+# ---------------------------------------------------------------------------
+# Expired exceptions — helpers and reports
+# ---------------------------------------------------------------------------
+
+class TestExpiredExceptions:
+    def test_find_expired_exceptions(self):
+        exceptions = [
+            {"rule": "r1", "reason": "old", "expires": date(2020, 1, 1)},
+            {"rule": "r2", "reason": "permanent"},
+            {"rule": "r3", "reason": "future", "expires": date(2099, 12, 31)},
+        ]
+        expired = _find_expired_exceptions(exceptions)
+        assert len(expired) == 1
+        assert expired[0][0]["reason"] == "old"
+        assert expired[0][1] > 0  # days_since > 0
+
+    def test_find_expired_none_when_all_active(self):
+        exceptions = [
+            {"rule": "r", "reason": "future", "expires": date(2099, 12, 31)},
+            {"rule": "r2", "reason": "permanent"},
+        ]
+        assert _find_expired_exceptions(exceptions) == []
+
+    def test_find_expired_excludes_today(self):
+        exceptions = [
+            {"rule": "r", "reason": "today", "expires": date.today()},
+        ]
+        assert _find_expired_exceptions(exceptions) == []
+
+    def test_expired_section_in_markdown(self):
+        exceptions = [{"rule": "r", "repo": "my-repo",
+                        "reason": "old fix", "expires": date(2020, 6, 15)}]
+        section = _build_expired_exceptions_section(exceptions)
+        assert "Expired Exceptions" in section
+        assert "no longer applied" in section
+        assert "my-repo" in section
+        assert "2020-06-15" in section
+
+    def test_expired_section_empty_when_none(self):
+        assert _build_expired_exceptions_section([]) == ""
+
+    def test_json_report_includes_expired_exceptions(self):
+        results = [RuleResult(rule="r")]
+        exceptions = [{"rule": "r", "reason": "old",
+                        "expires": date(2020, 1, 1)}]
+        data = json.loads(render_json(
+            "READY", results, "repo",
+            exceptions=exceptions, exception_hits=[0],
+        ))
+        assert "expired_exceptions" in data
+        assert data["expired_exceptions"][0]["days_since_expiry"] > 0
+        assert data["expired_exceptions"][0]["expires"] == "2020-01-01"
+
+    def test_json_report_no_expired_when_none(self):
+        results = [RuleResult(rule="r")]
+        exceptions = [{"rule": "r", "reason": "perm"}]
+        data = json.loads(render_json(
+            "READY", results, "repo",
+            exceptions=exceptions, exception_hits=[0],
+        ))
+        assert "expired_exceptions" not in data

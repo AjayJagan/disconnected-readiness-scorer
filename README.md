@@ -39,6 +39,7 @@ python3 main.py /path/to/target/repo --operator-path /tmp/opendatahub-operator  
 python3 main.py /path/to/target/repo --config /path/to/config.yaml              # custom central config
 python3 main.py /path/to/target/repo --arch-analyzer /path/to/arch-analyzer     # custom arch-analyzer binary
 python3 main.py /path/to/target/repo --verbose                                 # diagnostics + timing + files_checked in JSON
+python3 main.py --list-expiring                                                # list exceptions expiring within 14 days
 ```
 
 Exit code is `0` for READY, `1` for NOT READY.
@@ -118,6 +119,9 @@ All policy-based exclusions (test dirs, CI dirs, build files, etc.) are configur
 | `images`  | no       | List of glob patterns matched against finding image ref (any match wins) |
 | `message` | no       | Glob pattern matched against finding message                             |
 | `repo`    | no       | Repo name or `org/repo` — scopes exception to one component              |
+| `expires` | no       | ISO 8601 date (`YYYY-MM-DD`) after which the exception is no longer honored. Omit for permanent exceptions. |
+
+**Exception expiration:** When `expires` is set and the date has passed, the exception is no longer applied and matching findings revert to blocker severity. Exceptions expiring within 14 days generate a warning in both markdown and JSON reports. To renew an exception, update the `expires` date in `config/config.yaml` and submit a PR. Exceptions without `expires` are permanent.
 
 Path patterns support `**/` prefix to match at any depth (e.g. `**/Dockerfile` matches both `Dockerfile` and `build/Dockerfile`). Patterns ending with `/**` also match the directory itself (e.g. `**/config/scorecard/**` matches both `config/scorecard` and `config/scorecard/foo.yaml`).
 
@@ -151,6 +155,14 @@ exceptions:
     paths:
       - "config/scorecard/**"
     reason: "OLM scorecard config — test images, not production"
+
+  # Time-bounded exception — expires Dec 31, 2026
+  - rule: no-runtime-egress
+    repo: my-component
+    paths:
+      - "internal/legacy_client.go"
+    reason: "Legacy HTTP client — migrating to configurable URL"
+    expires: "2026-12-31"
 ```
 
 ### Skipped directories

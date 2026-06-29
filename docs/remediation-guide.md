@@ -127,3 +127,15 @@ exceptions:
     repo: opendatahub-io/kserve
     reason: "Dev tooling — not deployed in production"
 ```
+
+**Time-bounded exceptions:** For temporary workarounds, add an `expires: "YYYY-MM-DD"` field. The scanner will stop honoring the exception after that date, and the PR check will start failing again — ensuring the team returns to fix the root cause. The scanner warns 14 days before expiration in its report output. To renew, update the `expires` date and submit a PR.
+
+```yaml
+exceptions:
+  - rule: no-runtime-egress
+    repo: my-component
+    paths:
+      - "internal/legacy_client.go"
+    reason: "Legacy HTTP client — migrating to configurable URL"
+    expires: "2026-12-31"
+```

@@ -22,6 +22,10 @@
 
 {{ exceptions_section }}
 
+{{ expiring_exceptions_section }}
+
+{{ expired_exceptions_section }}
+
 {{ false_positive_section }}
 
 ---
