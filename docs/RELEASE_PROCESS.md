@@ -63,8 +63,8 @@ Check the following after release completion:
 **Expected outcomes:**
 - New semantic version tag exists (e.g., `v1.2.3`) - visible in GitHub repo tags
 - Floating major version tag updated (e.g., `v1` → `v1.2.3`) - check GitHub repo tags  
-- GitHub Release created with release notes - visible in GitHub Releases page
-- Release notes include usage examples and migration guidance
+- GitHub Release created with auto-generated release notes - visible in GitHub Releases page
+- Release notes include "What's Changed" section with PR links and contributors
 
 If any step failed, check the GitHub Actions logs for the "Create Release" workflow run.
 
@@ -82,7 +82,7 @@ If any step failed, check the GitHub Actions logs for the "Create Release" workf
 
 ```bash
 # Point floating tag back to previous version
-git tag -fa v1 v1.2.2  # Point v1 back to v1.2.2
+git tag -fa v1 v1.2.2 -m "Emergency rollback: v1 -> v1.2.2"  # Point v1 back to v1.2.2
 git push origin v1 --force
 
 # Document the emergency action
@@ -186,7 +186,7 @@ git fetch --tags --force
 
 3. **Emergency floating tag rollback** (last resort only):
    ```bash
-   git tag -fa v1 v1.2.2
+   git tag -fa v1 v1.2.2 -m "Emergency rollback due to critical issue"
    git push origin v1 --force
    
    # Immediately create communication plan

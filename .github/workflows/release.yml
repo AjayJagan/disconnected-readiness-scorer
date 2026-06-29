@@ -16,22 +16,25 @@ on:
         type: boolean
         default: false
 
-permissions:
-  contents: write
-
 jobs:
   create-release:
     runs-on: ubuntu-latest
+    if: github.ref_name == github.event.repository.default_branch
+    permissions:
+      contents: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           fetch-tags: true  # Need tags for validation, GitHub API handles the rest
+          persist-credentials: false
 
       - name: Validate version format
         id: validate
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          VERSION="${{ inputs.version }}"
+          VERSION="$INPUT_VERSION"
 
           # Ensure version starts with 'v' and follows semantic versioning
           if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -54,20 +57,32 @@ jobs:
           IS_MAJOR_BUMP="false"
           PREVIOUS_MAJOR=""
 
-          # Get the latest existing release to compare major versions
-          LATEST_TAG=$(git tag --list --sort=-version:refname | grep -E "^v[0-9]+\.[0-9]+\.[0-9]+$" | head -n 1 || echo "")
+          # Check if the current major version tag already exists
+          EXISTING_MAJOR_TAG=$(git tag --list | grep -E "^$MAJOR_VERSION$" || echo "")
 
-          if [[ -n "$LATEST_TAG" ]]; then
-            PREVIOUS_MAJOR=$(echo "$LATEST_TAG" | cut -d. -f1)
-            CURRENT_MAJOR_NUM=$(echo "$MAJOR_VERSION" | sed 's/v//')
-            PREVIOUS_MAJOR_NUM=$(echo "$PREVIOUS_MAJOR" | sed 's/v//')
+          if [[ -n "$EXISTING_MAJOR_TAG" ]]; then
+            # Get what the current major tag points to
+            CURRENT_MAJOR_TARGET=$(git rev-list -n 1 "$MAJOR_VERSION" 2>/dev/null || echo "")
 
-            if [[ "$CURRENT_MAJOR_NUM" -gt "$PREVIOUS_MAJOR_NUM" ]]; then
-              IS_MAJOR_BUMP="true"
-              echo "Detected major version bump: $PREVIOUS_MAJOR -> $MAJOR_VERSION"
+            if [[ -n "$CURRENT_MAJOR_TARGET" ]]; then
+              # Find the previous major version by getting the latest semver tag that's not current major
+              LATEST_TAG=$(git tag --list --sort=-version:refname | grep -E "^v[0-9]+\.[0-9]+\.[0-9]+$" | head -n 1 || echo "")
+
+              if [[ -n "$LATEST_TAG" ]]; then
+                PREVIOUS_MAJOR=$(echo "$LATEST_TAG" | cut -d. -f1)
+
+                # Only consider it a major bump if we're moving to a new major version
+                CURRENT_MAJOR_NUM=$(echo "$MAJOR_VERSION" | sed 's/v//')
+                PREVIOUS_MAJOR_NUM=$(echo "$PREVIOUS_MAJOR" | sed 's/v//')
+
+                if [[ "$CURRENT_MAJOR_NUM" -gt "$PREVIOUS_MAJOR_NUM" ]]; then
+                  IS_MAJOR_BUMP="true"
+                  echo "Detected major version bump: $PREVIOUS_MAJOR -> $MAJOR_VERSION"
+                fi
+              fi
             fi
           else
-            echo "No previous releases found - this is the initial release"
+            echo "No existing major tag $MAJOR_VERSION found - this is the initial release for this major version"
           fi
 
           echo "Version format valid: $VERSION"
@@ -76,31 +91,6 @@ jobs:
           echo "major_version=$MAJOR_VERSION" >> $GITHUB_OUTPUT
           echo "is_major_bump=$IS_MAJOR_BUMP" >> $GITHUB_OUTPUT
           echo "previous_major_version=$PREVIOUS_MAJOR" >> $GITHUB_OUTPUT
-
-      - name: Create release tags
-        run: |
-          VERSION="${{ steps.validate.outputs.version }}"
-          MAJOR_VERSION="${{ steps.validate.outputs.major_version }}"
-
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          # Create immutable release tag with descriptive message (following ODH pattern)
-          git tag -a "$VERSION" -m "Disconnected Readiness Scorer Release $VERSION"
-
-          echo "Created annotated tag: $VERSION"
-
-          # Create/update floating major version tag (e.g., v1 for v1.0.0)
-          git tag -fa "$MAJOR_VERSION" -m "Update $MAJOR_VERSION to $VERSION"
-
-          echo "Updated floating tag: $MAJOR_VERSION -> $VERSION"
-
-          # Push tags to remote
-          git push origin "$VERSION" "$MAJOR_VERSION" --force
-
-          echo "Successfully pushed tags to remote"
-          echo "   - Immutable Tag: $VERSION"
-          echo "   - Floating Tag: $MAJOR_VERSION -> $VERSION"
 
       - name: Update templates for major version bump
         if: steps.validate.outputs.is_major_bump == 'true'
@@ -133,6 +123,34 @@ jobs:
           commit_author: 'github-actions[bot] <github-actions[bot]@users.noreply.github.com>'
           skip_dirty_check: false
           skip_fetch: false
+
+      - name: Create release tags
+        run: |
+          VERSION="${{ steps.validate.outputs.version }}"
+          MAJOR_VERSION="${{ steps.validate.outputs.major_version }}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Create immutable release tag with descriptive message (following ODH pattern)
+          git tag -a "$VERSION" -m "Disconnected Readiness Scorer Release $VERSION"
+
+          echo "Created annotated tag: $VERSION"
+
+          # Create/update floating major version tag (e.g., v1 for v1.0.0)
+          git tag -fa "$MAJOR_VERSION" -m "Update $MAJOR_VERSION to $VERSION"
+
+          echo "Updated floating tag: $MAJOR_VERSION -> $VERSION"
+
+          # Push semantic version tag without force
+          git push origin "refs/tags/$VERSION:refs/tags/$VERSION"
+
+          # Push floating major version tag with force (may need to move)
+          git push --force origin "refs/tags/$MAJOR_VERSION:refs/tags/$MAJOR_VERSION"
+
+          echo "Successfully pushed tags to remote"
+          echo "   - Immutable Tag: $VERSION"
+          echo "   - Floating Tag: $MAJOR_VERSION -> $VERSION"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
