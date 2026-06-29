@@ -302,7 +302,7 @@ jobs:
           sudo mv kustomize /usr/local/bin/
 
       - name: Install dependencies
-        run: pip install pyyaml jinja2
+        run: uv pip install pyyaml jinja2
 
       - name: Run disconnected readiness check
         run: python3 /tmp/scorer/main.py . --report json --output disconnected-report.json

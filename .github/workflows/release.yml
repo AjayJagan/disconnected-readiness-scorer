@@ -20,6 +20,11 @@ jobs:
   create-release:
     runs-on: ubuntu-latest
     if: github.ref_name == github.event.repository.default_branch
+    outputs:
+      version: ${{ steps.validate.outputs.version }}
+      major_version: ${{ steps.validate.outputs.major_version }}
+      is_major_bump: ${{ steps.validate.outputs.is_major_bump }}
+      previous_major_version: ${{ steps.validate.outputs.previous_major_version }}
     permissions:
       contents: write
     steps:
@@ -32,6 +37,7 @@ jobs:
         id: validate
         env:
           INPUT_VERSION: ${{ inputs.version }}
+          PRERELEASE: ${{ inputs.prerelease }}
         run: |
           VERSION="$INPUT_VERSION"
 
@@ -50,6 +56,19 @@ jobs:
             echo "Tag $VERSION already exists!"
             echo "Release tags are immutable. Use a different version number."
             exit 1
+          fi
+
+          # Validate forward-only releases within major version series
+          # Check if any higher version exists within the same major version
+          EXISTING_VERSIONS_IN_MAJOR=$(git tag --list | grep -E "^$MAJOR_VERSION\.[0-9]+\.[0-9]+$" | sort -V)
+          if [[ -n "$EXISTING_VERSIONS_IN_MAJOR" ]]; then
+            LATEST_IN_MAJOR=$(echo "$EXISTING_VERSIONS_IN_MAJOR" | tail -n 1)
+            # Use sort -V to compare semantic versions
+            if [[ $(echo -e "$VERSION\n$LATEST_IN_MAJOR" | sort -V | tail -n 1) != "$VERSION" ]]; then
+              echo "Cannot release $VERSION: higher version $LATEST_IN_MAJOR already exists in major series $MAJOR_VERSION"
+              echo "Releases must move forward within a major version series."
+              exit 1
+            fi
           fi
 
           # Check if this is a major version bump
@@ -90,7 +109,7 @@ jobs:
           echo "previous_major_version=$PREVIOUS_MAJOR" >> $GITHUB_OUTPUT
 
       - name: Update templates for major version bump
-        if: steps.validate.outputs.is_major_bump == 'true'
+        if: steps.validate.outputs.is_major_bump == 'true' && inputs.prerelease != true
         env:
           MAJOR_VERSION: ${{ steps.validate.outputs.major_version }}
           PREVIOUS_MAJOR: ${{ steps.validate.outputs.previous_major_version }}
@@ -106,7 +125,7 @@ jobs:
           echo "Workflow and template updates completed"
 
       - name: Commit template changes
-        if: steps.validate.outputs.is_major_bump == 'true'
+        if: steps.validate.outputs.is_major_bump == 'true' && inputs.prerelease != true
         uses: stefanzweifel/git-auto-commit-action@8621497c8c39c72f3e2a999a26b4ca1b5058a842 # v5.0.1
         with:
           commit_message: |
@@ -125,6 +144,7 @@ jobs:
         env:
           VERSION: ${{ steps.validate.outputs.version }}
           MAJOR_VERSION: ${{ steps.validate.outputs.major_version }}
+          PRERELEASE: ${{ inputs.prerelease }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -134,16 +154,23 @@ jobs:
 
           echo "Created annotated tag: $VERSION"
 
-          # Create/update floating major version tag (e.g., v1 for v1.0.0)
-          git tag -fa "$MAJOR_VERSION" -m "Update $MAJOR_VERSION to $VERSION"
-
-          echo "Updated floating tag: $MAJOR_VERSION -> $VERSION"
+          # Only update floating major version tag for stable releases
+          # Prerelease versions should not move the floating tag as they are not stable
+          if [[ "$PRERELEASE" != "true" ]]; then
+            # Create/update floating major version tag (e.g., v1 for v1.0.0)
+            git tag -fa "$MAJOR_VERSION" -m "Update $MAJOR_VERSION to $VERSION"
+            echo "Updated floating tag: $MAJOR_VERSION -> $VERSION"
+          else
+            echo "Skipping floating tag update for prerelease version"
+          fi
 
           # Push semantic version tag without force
           git push origin "refs/tags/$VERSION:refs/tags/$VERSION"
 
-          # Push floating major version tag with force (may need to move)
-          git push --force origin "refs/tags/$MAJOR_VERSION:refs/tags/$MAJOR_VERSION"
+          # Push floating major version tag with force (may need to move) - only for stable releases
+          if [[ "$PRERELEASE" != "true" ]]; then
+            git push --force origin "refs/tags/$MAJOR_VERSION:refs/tags/$MAJOR_VERSION"
+          fi
 
           echo "Successfully pushed tags to remote"
           echo "   - Immutable Tag: $VERSION"
@@ -161,10 +188,17 @@ jobs:
         env:
           VERSION: ${{ steps.validate.outputs.version }}
           MAJOR_VERSION: ${{ steps.validate.outputs.major_version }}
+          PRERELEASE: ${{ inputs.prerelease }}
         run: |
           echo "Release $VERSION created successfully!"
           echo "   - Immutable Tag: $VERSION"
-          echo "   - Floating Tag: $MAJOR_VERSION -> $VERSION"
+
+          if [[ "$PRERELEASE" != "true" ]]; then
+            echo "   - Floating Tag: $MAJOR_VERSION -> $VERSION"
+          else
+            echo "   - Floating Tag: Not updated (prerelease)"
+          fi
+
           echo "   - GitHub Release: Created with automated changelog"
           echo ""
           echo "Release URL: ${{ github.server_url }}/${{ github.repository }}/releases/tag/$VERSION"
