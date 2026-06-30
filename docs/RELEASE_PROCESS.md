@@ -50,9 +50,9 @@ Review recent changes and determine the appropriate version increment:
 3. **Automated process executes**:
    - Validates version format (`v{major}.{minor}.{patch}`)
    - Checks tag doesn't already exist
-   - Updates template on major version bumps (e.g., `@v1` → `@v2`)
+   - Updates template on major version bumps (e.g., pinned commit → `@v1` for first release, then `@v1` → `@v2`)
    - Creates immutable semantic version tag
-   - Updates floating major version tag
+   - Creates/updates floating major version tag
    - Creates GitHub Release
 
 #### 3. Verify Release Success
@@ -256,6 +256,14 @@ git fetch --tags --force
 ```
 
 **GitHub Actions automatically fetches latest tags**, so most consumer workflows will get updates on their next run without manual intervention.
+
+#### Bootstrap Process (First Release Only)
+
+**Initial State**: Template uses pinned commit reference to avoid referencing non-existent tags  
+**First Release (v1.0.0)**: Automatically updates template from pinned commit to `@v1` floating tag  
+**Subsequent Releases**: Normal floating tag updates (`@v1` stays on `@v1`, major bumps update to `@v2`)
+
+This bootstrap process ensures the template never references non-existent tags while automatically transitioning to floating tags once the repository has releases.
 
 
 This comprehensive release process ensures both reproducible builds and ease of adoption while maintaining security and operational excellence.

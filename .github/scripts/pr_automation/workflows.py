@@ -101,7 +101,7 @@ class TemplateRenderer:
 class SimpleWorkflowManager:
     """Simple workflow management with addition-only principle."""
 
-    def _should_propagate_update(self, current_uses: str, template_uses: str) -> tuple[bool, str]:
+    def _should_propagate_update(self, current_uses: str, template_uses: str, trigger_reason: str | None = None) -> tuple[bool, str]:
         """
         Decide if update should propagate based on current usage pattern.
 
@@ -111,7 +111,8 @@ class SimpleWorkflowManager:
         2. Pinned users (@v1.2.3) - get PRs for any version update since they opted into manual control
         3. Manual override always works regardless of version patterns
         """
-        trigger_reason = os.getenv('TRIGGER_REASON', 'unknown')
+        if trigger_reason is None:
+            trigger_reason = os.getenv('TRIGGER_REASON', 'unknown')
 
         # Extract reference patterns
         current_ref_match = re.search(r'@(v[0-9]+(?:\.[0-9]+\.[0-9]+)?)', current_uses)

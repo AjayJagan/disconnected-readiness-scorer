@@ -78,7 +78,6 @@ uses: opendatahub-io/disconnected-readiness-scorer/.github/workflows/disconnecte
 ### Tag Management Policy
 - **Semantic version tags** (v1.0.0) follow immutability policy - once created, they are never moved or updated
 - **Floating major tags** (v1) are intentionally mutable - updated through the release workflow to point to latest release
-- **No GitHub tag protection** is currently configured - immutability relies on workflow discipline
 
 ### Supply Chain Security
 - Release workflow requires elevated permissions

@@ -18,15 +18,14 @@ jobs:
     outputs:
       version: ${{ steps.validate.outputs.version }}
       major_version: ${{ steps.validate.outputs.major_version }}
-      is_major_bump: ${{ steps.validate.outputs.is_major_bump }}
-      previous_major_version: ${{ steps.validate.outputs.previous_major_version }}
     permissions:
       contents: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
-          fetch-tags: true # Need tags for validation, GitHub API handles the rest
+          fetch-depth: 0 # Need full history for tag validation and template comparison
+          fetch-tags: true
 
       - name: Validate version format
         id: validate
@@ -105,8 +104,9 @@ jobs:
           git tag -fa "$MAJOR_VERSION" -m "Update $MAJOR_VERSION to $VERSION"
           echo "Updated floating tag: $MAJOR_VERSION -> $VERSION"
 
-          # Push both tags atomically - force only the floating tag, not the immutable tag
-          # If either fails, both fail, preventing partial publication state
+          # Push both tags in a single command - force only the floating tag, not the immutable tag
+          # Note: Not atomic on server side - if floating tag fails, immutable tag may still be pushed
+          # Partial failure can be retried manually by re-running the workflow
           git push origin "refs/tags/$VERSION:refs/tags/$VERSION" "+refs/tags/$MAJOR_VERSION:refs/tags/$MAJOR_VERSION"
 
           echo "Successfully pushed tags to remote"
