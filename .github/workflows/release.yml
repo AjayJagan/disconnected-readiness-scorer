@@ -10,11 +10,6 @@ on:
         description: "Release version (e.g., v1.0.0, v1.1.0, v2.0.0)"
         required: true
         type: string
-      prerelease:
-        description: "Mark as pre-release"
-        required: false
-        type: boolean
-        default: false
 
 jobs:
   create-release:
@@ -37,7 +32,6 @@ jobs:
         id: validate
         env:
           INPUT_VERSION: ${{ inputs.version }}
-          PRERELEASE: ${{ inputs.prerelease }}
         run: |
           VERSION="$INPUT_VERSION"
 
@@ -109,7 +103,7 @@ jobs:
           echo "previous_major_version=$PREVIOUS_MAJOR" >> $GITHUB_OUTPUT
 
       - name: Update templates for major version bump
-        if: steps.validate.outputs.is_major_bump == 'true' && inputs.prerelease != true
+        if: steps.validate.outputs.is_major_bump == 'true'
         env:
           MAJOR_VERSION: ${{ steps.validate.outputs.major_version }}
           PREVIOUS_MAJOR: ${{ steps.validate.outputs.previous_major_version }}
@@ -125,7 +119,7 @@ jobs:
           echo "Workflow and template updates completed"
 
       - name: Commit template changes
-        if: steps.validate.outputs.is_major_bump == 'true' && inputs.prerelease != true
+        if: steps.validate.outputs.is_major_bump == 'true'
         uses: stefanzweifel/git-auto-commit-action@8621497c8c39c72f3e2a999a26b4ca1b5058a842 # v5.0.1
         with:
           commit_message: |
@@ -144,7 +138,6 @@ jobs:
         env:
           VERSION: ${{ steps.validate.outputs.version }}
           MAJOR_VERSION: ${{ steps.validate.outputs.major_version }}
-          PRERELEASE: ${{ inputs.prerelease }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -154,23 +147,13 @@ jobs:
 
           echo "Created annotated tag: $VERSION"
 
-          # Only update floating major version tag for stable releases
-          # Prerelease versions should not move the floating tag as they are not stable
-          if [[ "$PRERELEASE" != "true" ]]; then
-            # Create/update floating major version tag (e.g., v1 for v1.0.0)
-            git tag -fa "$MAJOR_VERSION" -m "Update $MAJOR_VERSION to $VERSION"
-            echo "Updated floating tag: $MAJOR_VERSION -> $VERSION"
-          else
-            echo "Skipping floating tag update for prerelease version"
-          fi
+          # Create/update floating major version tag (e.g., v1 for v1.0.0)
+          git tag -fa "$MAJOR_VERSION" -m "Update $MAJOR_VERSION to $VERSION"
+          echo "Updated floating tag: $MAJOR_VERSION -> $VERSION"
 
-          # Push semantic version tag without force
-          git push origin "refs/tags/$VERSION:refs/tags/$VERSION"
-
-          # Push floating major version tag with force (may need to move) - only for stable releases
-          if [[ "$PRERELEASE" != "true" ]]; then
-            git push --force origin "refs/tags/$MAJOR_VERSION:refs/tags/$MAJOR_VERSION"
-          fi
+          # Push both tags atomically - force only the floating tag, not the immutable tag
+          # If either fails, both fail, preventing partial publication state
+          git push origin "refs/tags/$VERSION:refs/tags/$VERSION" "+refs/tags/$MAJOR_VERSION:refs/tags/$MAJOR_VERSION"
 
           echo "Successfully pushed tags to remote"
           echo "   - Immutable Tag: $VERSION"
@@ -182,21 +165,16 @@ jobs:
           tag_name: ${{ steps.validate.outputs.version }}
           name: Release ${{ steps.validate.outputs.version }}
           generate_release_notes: true
-          prerelease: ${{ inputs.prerelease }}
+          prerelease: false
 
       - name: Verify release success
         env:
           VERSION: ${{ steps.validate.outputs.version }}
           MAJOR_VERSION: ${{ steps.validate.outputs.major_version }}
-          PRERELEASE: ${{ inputs.prerelease }}
         run: |
           echo "Release $VERSION created successfully!"
           echo "   - Immutable Tag: $VERSION"
-
-          if [[ "$PRERELEASE" != "true" ]]; then
-            echo "   - Floating Tag: $MAJOR_VERSION -> $VERSION"
-          else
-            echo "   - Floating Tag: Not updated (prerelease)"
+          echo "   - Floating Tag: $MAJOR_VERSION -> $VERSION"
           fi
 
           echo "   - GitHub Release: Created with automated changelog"

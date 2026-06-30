@@ -45,7 +45,6 @@ Review recent changes and determine the appropriate version increment:
    Branch: main
    Inputs:
      version: v1.2.3  # New version to create
-     prerelease: false  # true for pre-release versions
    ```
 
 3. **Automated process executes**:
