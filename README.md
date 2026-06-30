@@ -287,32 +287,48 @@ jobs:
   disconnected-score:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f6ec72d0184c0866650fe # v6.2.0
         with:
-          python-version: '3.12'
-
-      - name: Clone disconnected-readiness-scorer
-        run: git clone --depth 1 --branch v1 https://github.com/opendatahub-io/disconnected-readiness-scorer.git /tmp/scorer
-
-      - name: Install kustomize
-        run: |
-          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
-          sudo mv kustomize /usr/local/bin/
-
+          python-version: "3.12"
+          
+      - name: Checkout scorer
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: opendatahub-io/disconnected-readiness-scorer
+          ref: 29ae4bc3591a988c6e3f6ec72d0184c0866650fe # Pinned to specific commit for deterministic execution
+          path: scorer
+          
       - name: Install dependencies
-        run: uv pip install pyyaml jinja2
-
+        run: |
+          cd scorer && uv sync --extra report --frozen && make install-arch-analyzer
+          
       - name: Run disconnected readiness check
-        run: python3 /tmp/scorer/main.py . --report json --output disconnected-report.json
-
-      - name: Upload report
+        env:
+          INPUT_RULES: ${{ inputs.rules }}
+        run: |
+          cd scorer
+          # Build arguments array with rules if specified
+          ARGS=("${{ github.workspace }}" --report json,markdown -o disconnected-report.json disconnected-report.md)
+          if [ -n "$INPUT_RULES" ]; then
+            ARGS+=(--rules "$INPUT_RULES")
+          fi
+          # Run analysis and capture JSON output
+          uv run main.py "${ARGS[@]}"
+          
+      - name: Store results as artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: disconnected-readiness-report
-          path: disconnected-report.json
+          path: |
+            scorer/disconnected-report.json
+            scorer/disconnected-report.md
+          retention-days: 1
 ```
 
 The workflow exits with code `1` when blocker-level findings are present, which will fail the PR check.

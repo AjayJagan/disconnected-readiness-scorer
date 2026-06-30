@@ -52,82 +52,36 @@ jobs:
             exit 1
           fi
 
-          # Validate forward-only releases within major version series
-          # Check if any higher version exists within the same major version
-          EXISTING_VERSIONS_IN_MAJOR=$(git tag --list | grep -E "^$MAJOR_VERSION\.[0-9]+\.[0-9]+$" | sort -V)
-          if [[ -n "$EXISTING_VERSIONS_IN_MAJOR" ]]; then
-            LATEST_IN_MAJOR=$(echo "$EXISTING_VERSIONS_IN_MAJOR" | tail -n 1)
-            # Use sort -V to compare semantic versions
-            if [[ $(echo -e "$VERSION\n$LATEST_IN_MAJOR" | sort -V | tail -n 1) != "$VERSION" ]]; then
-              echo "Cannot release $VERSION: higher version $LATEST_IN_MAJOR already exists in major series $MAJOR_VERSION"
-              echo "Releases must move forward within a major version series."
-              exit 1
-            fi
-          fi
-
-          # Check if this is a major version bump
-          IS_MAJOR_BUMP="false"
-          PREVIOUS_MAJOR=""
-
-          # Check if the current major version tag already exists
-          EXISTING_MAJOR_TAG=$(git tag --list | grep -E "^$MAJOR_VERSION$" || echo "")
-
-          if [[ -z "$EXISTING_MAJOR_TAG" ]]; then
-            # Major version tag doesn't exist yet - this is the first release in a new major series
-            # Find the highest existing major version to determine if this is truly a major bump
-            CURRENT_MAJOR_NUM=$(echo "$MAJOR_VERSION" | sed 's/v//')
-
-            # Get all existing major version numbers and find the highest one below current
-            EXISTING_MAJORS=$(git tag --list | grep -E "^v[0-9]+$" | sed 's/v//' | sort -n)
-
-            if [[ -n "$EXISTING_MAJORS" ]]; then
-              HIGHEST_EXISTING_MAJOR=$(echo "$EXISTING_MAJORS" | tail -n 1)
-
-              if [[ "$CURRENT_MAJOR_NUM" -gt "$HIGHEST_EXISTING_MAJOR" ]]; then
-                IS_MAJOR_BUMP="true"
-                PREVIOUS_MAJOR="v$HIGHEST_EXISTING_MAJOR"
-                echo "Detected major version bump: $PREVIOUS_MAJOR -> $MAJOR_VERSION"
-              fi
-            else
-              echo "No existing major tags found - this is the initial major version"
-            fi
-          else
-            echo "Major tag $MAJOR_VERSION already exists - this is a minor/patch release within existing major version"
-          fi
-
           echo "Version format valid: $VERSION"
           echo "Tag $VERSION is available"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "major_version=$MAJOR_VERSION" >> $GITHUB_OUTPUT
-          echo "is_major_bump=$IS_MAJOR_BUMP" >> $GITHUB_OUTPUT
-          echo "previous_major_version=$PREVIOUS_MAJOR" >> $GITHUB_OUTPUT
 
-      - name: Update templates for major version bump
-        if: steps.validate.outputs.is_major_bump == 'true'
+      - name: Update template for major version bump
         env:
-          MAJOR_VERSION: ${{ steps.validate.outputs.major_version }}
-          PREVIOUS_MAJOR: ${{ steps.validate.outputs.previous_major_version }}
+          VERSION: ${{ steps.validate.outputs.version }}
         run: |
-          echo "Updating workflows and templates from $PREVIOUS_MAJOR to $MAJOR_VERSION"
+          # Generic major bump detection - works for any version (v1, v2, v3, etc.)
+          TEMPLATE_REF=$(grep -o '@v[0-9]\+' .github/templates/workflow.yml)
+          TEMPLATE_MAJOR=$(echo "$TEMPLATE_REF" | sed 's/@v//')
+          RELEASE_MAJOR=$(echo "$VERSION" | cut -d. -f1 | sed 's/v//')
 
-          # Update template workflow for users to copy
-          sed -i "s|@$PREVIOUS_MAJOR|@$MAJOR_VERSION|g" .github/templates/workflow.yml
+          if [[ "$TEMPLATE_MAJOR" -lt "$RELEASE_MAJOR" ]]; then
+            echo "Major version bump detected: template @v$TEMPLATE_MAJOR → @v$RELEASE_MAJOR"
 
-          # Update the reusable workflow to checkout the new major version of itself
-          sed -i "s|ref: $PREVIOUS_MAJOR|ref: $MAJOR_VERSION|g" .github/workflows/disconnected-readiness-check.yml
+            # Update template - replace current major version with new one
+            sed -i "s|@v$TEMPLATE_MAJOR|@v$RELEASE_MAJOR|g" .github/templates/workflow.yml
 
-          echo "Workflow and template updates completed"
+            echo "Template updated successfully"
+          else
+            echo "No template update needed: template @v$TEMPLATE_MAJOR matches release v$RELEASE_MAJOR"
+          fi
 
       - name: Commit template changes
-        if: steps.validate.outputs.is_major_bump == 'true'
         uses: stefanzweifel/git-auto-commit-action@8621497c8c39c72f3e2a999a26b4ca1b5058a842 # v5.0.1
         with:
-          commit_message: |
-            Update template to use ${{ steps.validate.outputs.major_version }} after major version bump
-
-            - Updated from ${{ steps.validate.outputs.previous_major_version }} to ${{ steps.validate.outputs.major_version }}
-            - Ensures new users get latest major version in template
-          file_pattern: ".github/templates/workflow.yml .github/workflows/disconnected-readiness-check.yml"
+          commit_message: "Update template to use @v${{ steps.validate.outputs.major_version }}"
+          file_pattern: ".github/templates/workflow.yml"
           commit_user_name: "github-actions[bot]"
           commit_user_email: "github-actions[bot]@users.noreply.github.com"
           commit_author: "github-actions[bot] <github-actions[bot]@users.noreply.github.com>"
@@ -175,7 +129,6 @@ jobs:
           echo "Release $VERSION created successfully!"
           echo "   - Immutable Tag: $VERSION"
           echo "   - Floating Tag: $MAJOR_VERSION -> $VERSION"
-          fi
 
           echo "   - GitHub Release: Created with automated changelog"
           echo ""

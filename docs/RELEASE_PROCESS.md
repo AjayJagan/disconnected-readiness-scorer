@@ -6,7 +6,7 @@ This document outlines the step-by-step process for cutting releases, managing f
 
 The release process is designed to balance two key requirements:
 1. **Reproducibility**: Deterministic builds that consumers can rely on
-2. **Ease of adoption**: Consumers get security updates without manual intervention
+2. **Ease of adoption**: Consumers get updates without manual intervention
 
 ## Cutting a New Release
 
@@ -50,7 +50,7 @@ Review recent changes and determine the appropriate version increment:
 3. **Automated process executes**:
    - Validates version format (`v{major}.{minor}.{patch}`)
    - Checks tag doesn't already exist
-   - Generates release notes from commits
+   - Updates template on major version bumps (e.g., `@v1` → `@v2`)
    - Creates immutable semantic version tag
    - Updates floating major version tag
    - Creates GitHub Release
@@ -62,6 +62,7 @@ Check the following after release completion:
 **Expected outcomes:**
 - New semantic version tag exists (e.g., `v1.2.3`) - visible in GitHub repo tags
 - Floating major version tag updated (e.g., `v1` → `v1.2.3`) - check GitHub repo tags  
+- Template updated on major version bumps (e.g., `@v1` → `@v2` in `.github/templates/workflow.yml`)
 - GitHub Release created with auto-generated release notes - visible in GitHub Releases page
 - Release notes include "What's Changed" section with PR links and contributors
 
@@ -70,8 +71,12 @@ If any step failed, check the GitHub Actions logs for the "Create Release" workf
 #### 4. Post-Release Actions
 
 1. **Update documentation** if breaking changes occurred (particularly for major versions)
-2. **Monitor for issues** in the first 24-48 hours after release
-3. **Note**: Consumers using floating tags (`@v1`, `@v2`, etc.) will automatically receive all patch and minor updates within their major version (including bug fixes, security patches, and new features)
+2. **Monitor for issues** in the first 24-48 hours after release  
+3. **Template propagation**: Major version template updates automatically trigger PR automation:
+   - Floating tag users (`@v1`) get PRs to upgrade to `@v2` 
+   - Pinned users (`@v1.x.x`) get PRs to upgrade to `@v2.0.0`
+   - Use manual override (`gh workflow run create-drs-prs.yml -f trigger_reason=manual`) for critical updates that need immediate attention
+4. **Note**: Consumers using floating tags (`@v1`, `@v2`, etc.) will automatically receive all patch and minor updates within their major version (including bug fixes, security patches, and new features)
 
 ## Emergency Procedures and Rollback Scenarios
 
@@ -103,9 +108,9 @@ git diff v1.2.2..v1.2.3
 # This maintains forward progress and clear audit trail
 ```
 
-**✅ Automatic Fix for Floating Tag Users:** Teams using floating major version tags (e.g., `@v1`, `@v2`) will automatically get the hotfix when their respective floating tag moves. No manual action required by consumer teams.
+**Automatic Fix for Floating Tag Users:** Teams using floating major version tags (e.g., `@v1`, `@v2`) will automatically get the hotfix when their respective floating tag moves. No manual action required by consumer teams.
 
-**⚠️ Manual Action for Pinned Users:** Teams using pinned versions (e.g., `@v1.2.3`, `@v2.1.0`) must be notified to upgrade manually or receive a PR for the fix.
+**Automatic PRs for Pinned Users:** Teams using pinned versions (e.g., `@v1.2.3`, `@v2.1.0`) will automatically receive PRs for the fix.
 
 **Last Resort: Emergency Floating Tag Rollback**
 
@@ -152,19 +157,38 @@ echo "Alert: v1 rolled back to v1.2.2 due to critical issue in v1.2.3" > ALERT.m
 
 Consumer repositories are **automatically onboarded** via the `create-drs-prs.yml` workflow:
 
-✅ **Automated PR creation** - Workflow creates PRs in target repositories  
-✅ **Template propagation** - Changes to `.github/templates/workflow.yml` trigger updates  
-✅ **Weekly scans** - Discovers new repositories that need onboarding  
-✅ **Safe process** - All changes go through normal PR review
+**Automated PR creation** - Workflow creates PRs in target repositories  
+**Template propagation** - Changes to `.github/templates/workflow.yml` trigger updates  
+**Weekly scans** - Discovers new repositories that need onboarding  
+**Safe process** - All changes go through normal PR review
 
 
 ### Automated PR Strategy
 
-**The automation creates PRs using floating major version tags** (e.g., `@v1`, `@v2`) by default. This choice balances:
+**The automation uses intelligent PR creation based on your version choice:**
 
-✅ **Automatic security patches** - Teams get fixes without manual intervention  
-✅ **Reduced maintenance burden** - No weekly update PRs across 15+ repositories  
-✅ **Breaking change protection** - Manual upgrade only needed for major versions (v1→v2)
+#### For Floating Tag Users (`@v1`, `@v2`)
+**Automatic minor/patch updates** - Get fixes and features without PRs  
+**PR only for major versions** - Manual review required for `v1` → `v2`  
+**Reduced PR noise** - No unnecessary update notifications  
+
+#### For Pinned Version Users (`@v1.2.3`)
+**PR for all updates** - Full control over when to adopt changes  
+**Explicit opt-in** - You chose manual control, so you get PRs  
+**Detailed change descriptions** - Clear information about what's new  
+
+### Manual Override Capability
+
+**For critical updates or emergency situations:**
+```bash
+# Force update PRs regardless of version pattern
+gh workflow run create-drs-prs.yml -f trigger_reason=manual
+```
+
+**When manual override is used:**
+- Creates PRs for ALL repositories regardless of floating/pinned status
+- Useful for critical security patches or breaking rule changes  
+- Requires explicit operator decision
 
 ### Alternative Security Approaches
 
@@ -176,6 +200,7 @@ Consumer repositories are **automatically onboarded** via the `create-drs-prs.ym
 + uses: opendatahub-io/disconnected-readiness-scorer/.github/workflows/disconnected-readiness-check.yml@v1.2.3
 ```
 
+**Note:** Once you switch to pinned versions, you'll start receiving update PRs for all releases.
 
 **For complete security tier documentation, see [VERSIONING.md](VERSIONING.md)**
 
