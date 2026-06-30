@@ -200,6 +200,13 @@ exceptions:
       - "ghcr.io/kubeflow/training-v1/kubectl-delivery:*"
     reason: "MPI kubectl-delivery image default — MPI is not supported downstream"
 
+  - rule: "no-runtime-egress"
+    repo: training-operator
+    paths:
+      - "sdk/python/kubeflow/storage_initializer/**"
+      - "sdk/python/kubeflow/trainer/hf_llm_training.py"
+    reason: "Alpha SDK train() API — not supported downstream"
+
   # --- data-science-pipelines-operator ---
   # (no repo-specific exceptions)
 
