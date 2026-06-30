@@ -173,26 +173,23 @@ exceptions:
     reference: "https://issues.redhat.com/browse/RHOAIENG-69989"
 
   # --- training-operator ---
-  - rule: "no-image-tags"
+  - rules:
+      - no-image-tags
+      - image-manifest-complete
     repo: training-operator
     paths:
       - "sdk/python/kubeflow/training/constants/constants.py"
       - "sdk/python/kubeflow/training/api/training_client.py"
     reason: "SDK client-side default images — users provide their own image; not used by the operator"
 
-  - rule: "image-manifest-complete"
-    repo: training-operator
-    paths:
-      - "sdk/python/kubeflow/training/constants/constants.py"
-    reason: "SDK client-side default images — users provide their own image; not used by the operator"
-
-  - rule: "python-imports-bundled"
+  - rules: python-imports-bundled
     repo: training-operator
     paths:
       - "sdk/python/kubeflow/training/utils/utils.py"
       - "sdk/python/kubeflow/training/api/training_client.py"
     reason: "utils.py generates a training pod script (user controls pip index URL); training_client.py is an error message string — neither is a runtime download"
-  - rule: "no-image-tags"
+
+  - rules: no-image-tags
     repo: training-operator
     paths:
       - "pkg/config/config.go"
@@ -200,7 +197,7 @@ exceptions:
       - "ghcr.io/kubeflow/training-v1/kubectl-delivery:*"
     reason: "MPI kubectl-delivery image default — MPI is not supported downstream"
 
-  - rule: "no-runtime-egress"
+  - rules: no-runtime-egress
     repo: training-operator
     paths:
       - "sdk/python/kubeflow/storage_initializer/**"
