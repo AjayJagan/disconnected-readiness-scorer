@@ -242,12 +242,12 @@ class SimpleWorkflowManager:
         if is_floating_tag and is_major_version_change:
             # Major version update for floating tag users
             body = f"**Major Version Update Available: {current_ref} → {template_ref}**\n\n"
-        elif not is_floating_tag:
-            # Updates for pinned version users
+        elif current_ref and template_ref and not is_floating_tag:
+            # Updates for pinned version users (only when refs are available)
             body = f"**Tool Update Available: {current_ref} → {template_ref}**\n\n"
             body += "Please merge this to get the latest updates.\n\n"
         else:
-            # Template changes or other updates
+            # Template changes or other updates (fallback when refs are missing)
             body = "**DRS Workflow Enhancement**\n\n"
             body += "This PR enhances your DRS workflow while preserving all your customizations.\n\n"
 
