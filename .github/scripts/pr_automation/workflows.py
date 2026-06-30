@@ -162,7 +162,7 @@ class SimpleWorkflowManager:
         # Default: fail closed for unrecognized trigger reasons (CWE-754)
         return False, f"Unknown trigger reason '{trigger_reason}' - refusing update to prevent misconfiguration. Valid triggers: template_change, scheduled, manual"
 
-    def update_workflow_safe(self, existing_content: str, template_content: str) -> tuple[str, UpdateResult]:
+    def update_workflow_safe(self, existing_content: str, template_content: str, trigger_reason: str | None = None) -> tuple[str, UpdateResult]:
         """
         Update workflow safely with simple rules:
         1. Always update 'uses' path to mimic what is present in the template
@@ -184,7 +184,7 @@ class SimpleWorkflowManager:
             template_uses = template['jobs']['check']['uses']
 
             # Central Authority Logic: Determine if propagation should happen
-            should_propagate, propagation_reason = self._should_propagate_update(current_uses, template_uses)
+            should_propagate, propagation_reason = self._should_propagate_update(current_uses, template_uses, trigger_reason)
 
             if not should_propagate:
                 print(f"    Skipping propagation: {propagation_reason}")

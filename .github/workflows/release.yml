@@ -15,9 +15,6 @@ jobs:
   create-release:
     runs-on: ubuntu-latest
     if: github.ref_name == github.event.repository.default_branch
-    outputs:
-      version: ${{ steps.validate.outputs.version }}
-      major_version: ${{ steps.validate.outputs.major_version }}
     permissions:
       contents: write
     steps:
